@@ -38,7 +38,7 @@ class RiskDecision(BaseModel):
     approved: bool
     reasons: list[str]
     approved_quantity: float | None = Field(default=None, ge=0.0)
-    approved_trade_value: float | None = Field(default=None, ge=0.0)
+    estimated_trade_value: float = Field(ge=0.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

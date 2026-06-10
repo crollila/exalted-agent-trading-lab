@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
     proposal_id TEXT NOT NULL,
     approved INTEGER NOT NULL,
     reasons_json TEXT NOT NULL,
+    approved_quantity REAL,
+    estimated_trade_value REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY(proposal_id) REFERENCES trade_proposals(proposal_id)
 );

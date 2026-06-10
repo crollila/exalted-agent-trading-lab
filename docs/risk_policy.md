@@ -27,3 +27,14 @@ Every proposal is logged.
 Every approval or rejection is logged.
 
 Every order attempt is logged.
+
+## Approval payload
+
+The risk engine is the only component that converts a proposal into an executable quantity.
+
+For each proposal, the risk decision records:
+
+- `approved_quantity`: the exact quantity the executor may use, or null when rejected.
+- `estimated_trade_value`: the proposal's estimated dollar value at validation time.
+
+The order executor must not size orders itself. It may only create an order from an approved risk decision with a positive `approved_quantity`.

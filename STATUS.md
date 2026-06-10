@@ -9,13 +9,13 @@ Included:
 - Python source tree.
 - SQLite schema.
 - Pydantic models with basic validation.
-- Stateful deterministic risk validator.
+- Stateful deterministic risk validator with approved quantity and estimated trade value outputs.
 - Strategy interface.
 - SPY buy-and-hold baseline.
 - Momentum placeholder strategy.
-- Dry-run order executor.
+- Dry-run order executor that only uses risk-approved quantities.
 - Benchmark and daily report helpers.
-- Expanded tests for risk rules, validation, sizing, execution logging, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 

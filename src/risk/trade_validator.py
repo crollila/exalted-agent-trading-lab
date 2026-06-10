@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from src.brokers.order_models import AssetClass, RiskDecision, TradeAction, TradeProposal
 from src.portfolio.portfolio_state import PortfolioState
@@ -34,7 +35,7 @@ class TradeValidator:
             reasons.append("Rejected: estimated price must be greater than zero.")
 
         trade_quantity = self._estimate_quantity(proposal, portfolio) if proposal.estimated_price > 0 else 0.0
-        trade_value = trade_quantity * proposal.estimated_price if trade_quantity > 0 else 0.0
+        trade_value = self._estimate_trade_value(trade_quantity, proposal.estimated_price) if trade_quantity > 0 else 0.0
 
         if trade_quantity <= 0:
             reasons.append("Rejected: estimated trade quantity must be greater than zero.")
@@ -74,7 +75,7 @@ class TradeValidator:
             approved=approved,
             reasons=["Approved."] if not reasons else reasons,
             approved_quantity=trade_quantity if approved else None,
-            approved_trade_value=trade_value if approved else None,
+            estimated_trade_value=trade_value,
         )
 
     def _estimate_quantity(self, proposal: TradeProposal, portfolio: PortfolioState) -> float:
@@ -83,7 +84,7 @@ class TradeValidator:
 
         if proposal.target_weight is not None:
             target_dollars = dollars_for_target_weight(portfolio.equity, proposal.target_weight)
-            current_value = portfolio.position_value(proposal.symbol)
+            current_value = self._projected_position_value_before_trade(proposal.symbol, portfolio)
 
             if proposal.action == TradeAction.BUY:
                 trade_dollars = max(target_dollars - current_value, 0.0)
@@ -93,6 +94,9 @@ class TradeValidator:
             return shares_for_dollars(trade_dollars, proposal.estimated_price)
 
         return 0.0
+
+    def _estimate_trade_value(self, quantity: float, estimated_price: float) -> float:
+        return float(Decimal(str(quantity)) * Decimal(str(estimated_price)))
 
     def _projected_quantity_before_trade(self, symbol: str, portfolio: PortfolioState) -> float:
         position = portfolio.positions.get(symbol)

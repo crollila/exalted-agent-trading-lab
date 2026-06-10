@@ -116,6 +116,34 @@ def test_rejects_sell_orders_that_exceed_current_position():
 
     decision = TradeValidator.default().validate(proposal, portfolio(positions=current_positions))
     assert not decision.approved
+    assert decision.approved_quantity is None
+    assert decision.estimated_trade_value == 1200
+
+
+def test_approves_sell_quantity_within_current_position():
+    current_positions = {
+        "TSLA": Position(
+            symbol="TSLA",
+            quantity=5,
+            market_value=1000,
+            average_entry_price=200,
+        )
+    }
+    proposal = TradeProposal(
+        strategy_id="test",
+        symbol="TSLA",
+        action=TradeAction.SELL,
+        asset_class=AssetClass.STOCK,
+        quantity=4,
+        estimated_price=200,
+        thesis="test",
+        confidence=0.5,
+    )
+
+    decision = TradeValidator.default().validate(proposal, portfolio(positions=current_positions))
+    assert decision.approved
+    assert decision.approved_quantity == 4
+    assert decision.estimated_trade_value == 800
 
 
 def test_rejects_more_than_five_new_positions_per_day():
@@ -154,4 +182,22 @@ def test_approves_reasonable_buy():
     decision = TradeValidator.default().validate(proposal, portfolio())
     assert decision.approved
     assert decision.approved_quantity == 10
-    assert decision.approved_trade_value == 1000
+    assert decision.estimated_trade_value == 1000
+
+
+def test_approved_quantity_and_trade_value_are_exact_for_quantity_order():
+    proposal = TradeProposal(
+        strategy_id="test",
+        symbol="MSFT",
+        action=TradeAction.BUY,
+        asset_class=AssetClass.STOCK,
+        quantity=3.25,
+        estimated_price=123.45,
+        thesis="test",
+        confidence=0.5,
+    )
+
+    decision = TradeValidator.default().validate(proposal, portfolio())
+    assert decision.approved
+    assert decision.approved_quantity == 3.25
+    assert decision.estimated_trade_value == 401.2125

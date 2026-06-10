@@ -26,7 +26,16 @@ def initialize_database(database_path: Path | str) -> None:
     schema_sql = schema_path.read_text(encoding="utf-8")
     with get_connection(database_path) as conn:
         conn.executescript(schema_sql)
+        _ensure_risk_decision_columns(conn)
         conn.commit()
+
+
+def _ensure_risk_decision_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(risk_decisions)").fetchall()}
+    if "approved_quantity" not in columns:
+        conn.execute("ALTER TABLE risk_decisions ADD COLUMN approved_quantity REAL")
+    if "estimated_trade_value" not in columns:
+        conn.execute("ALTER TABLE risk_decisions ADD COLUMN estimated_trade_value REAL NOT NULL DEFAULT 0")
 
 
 def insert_trade_proposal(database_path: Path | str, proposal: TradeProposal) -> None:
@@ -60,13 +69,16 @@ def insert_risk_decision(database_path: Path | str, decision: RiskDecision) -> N
         conn.execute(
             '''
             INSERT INTO risk_decisions (
-                proposal_id, approved, reasons_json, created_at
-            ) VALUES (?, ?, ?, ?)
+                proposal_id, approved, reasons_json, approved_quantity,
+                estimated_trade_value, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ''',
             (
                 decision.proposal_id,
                 int(decision.approved),
                 json.dumps(decision.reasons),
+                decision.approved_quantity,
+                decision.estimated_trade_value,
                 decision.created_at.isoformat(),
             ),
         )
