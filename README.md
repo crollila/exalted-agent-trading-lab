@@ -58,6 +58,7 @@ python -m src.main init-db
 
 ```bash
 python -m src.main dry-run
+python -m src.main dry-run --strategy momentum_v1
 ```
 
 ## Report examples

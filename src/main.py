@@ -15,12 +15,17 @@ from src.db.database import (
     insert_portfolio_snapshot,
 )
 from src.execution.order_executor import OrderExecutor
-from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
 from src.portfolio.portfolio_state import PortfolioState
 from src.reporting.benchmark_report import BenchmarkReport
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.risk.risk_rules import RiskRules
 from src.risk.trade_validator import TradeValidator
+from src.strategies.base import Strategy
+from src.strategies.momentum_v1 import MomentumV1Strategy
+from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
+
+
+KNOWN_STRATEGIES = ("spy_buy_hold", "momentum_v1")
 
 
 def run_init_db() -> None:
@@ -29,7 +34,15 @@ def run_init_db() -> None:
     print(f"Initialized database at {settings.database_path}")
 
 
-def run_dry_run() -> None:
+def build_strategy(strategy_name: str) -> Strategy:
+    if strategy_name == "spy_buy_hold":
+        return SpyBuyHoldStrategy()
+    if strategy_name == "momentum_v1":
+        return MomentumV1Strategy()
+    raise ValueError(f"Unknown strategy: {strategy_name}")
+
+
+def run_dry_run(strategy_name: str = "spy_buy_hold") -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
 
@@ -40,7 +53,7 @@ def run_dry_run() -> None:
         timestamp=datetime.now(timezone.utc),
     )
 
-    strategy = SpyBuyHoldStrategy()
+    strategy = build_strategy(strategy_name)
     run_id = create_run(
         settings.database_path,
         strategy_id=strategy.strategy_id,
@@ -108,7 +121,10 @@ def run_dry_run() -> None:
         complete_run(settings.database_path, run_id, status="failed")
         raise
 
-    print(f"Dry run complete. Run ID: {run_id}. Proposals processed: {len(proposals)}. Daily report logged.")
+    print(
+        f"Dry run complete. Strategy: {strategy.strategy_id}. "
+        f"Run ID: {run_id}. Proposals processed: {len(proposals)}. Daily report logged."
+    )
 
 
 def run_paper_status() -> None:
@@ -152,7 +168,13 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("init-db", help="Initialize SQLite database")
-    subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
+    dry_run_parser = subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
+    dry_run_parser.add_argument(
+        "--strategy",
+        choices=KNOWN_STRATEGIES,
+        default="spy_buy_hold",
+        help="Local deterministic strategy to run. Defaults to spy_buy_hold.",
+    )
     subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
     report_parser = subparsers.add_parser("report", help="Generate a local benchmark report")
     report_parser.add_argument(
@@ -170,7 +192,7 @@ def main() -> None:
     if args.command == "init-db":
         run_init_db()
     elif args.command == "dry-run":
-        run_dry_run()
+        run_dry_run(strategy_name=args.strategy)
     elif args.command == "paper-status":
         run_paper_status()
     elif args.command == "report":

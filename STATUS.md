@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 3.5 run-aware benchmark reporting completed.
+Phase 4 simple deterministic momentum strategy completed.
 
 Included:
 
@@ -12,8 +12,9 @@ Included:
 - Stateful deterministic risk validator with approved quantity and estimated trade value outputs.
 - Strategy interface.
 - SPY buy-and-hold baseline.
-- Momentum placeholder strategy.
+- Simple deterministic momentum baseline strategy.
 - Dry-run order executor that only uses risk-approved quantities.
+- `dry-run --strategy` CLI selection for known local deterministic strategies.
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
 - `paper-status` CLI command with safe failure when credentials or paper settings are missing.
 - SQLite-backed benchmark and daily report generator.
@@ -21,7 +22,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -40,7 +41,7 @@ Current allowed mode:
 
 ## Next step
 
-Review the Phase 3.5 run-aware report behavior, then continue with broader paper-trading orchestration or deterministic strategy improvements when ready.
+Review the Phase 4 simple momentum baseline, then continue with multi-strategy comparison or Hermes proposal generation when ready.
 
 ## Project manager rule
 

@@ -76,9 +76,20 @@ Requirements:
 
 Goal: add a deterministic, non-LLM baseline strategy.
 
+Status: complete.
+
 Reason:
 
 If Hermes cannot beat a simple dumb baseline, Hermes is not useful.
+
+Requirements:
+
+- Rank symbols by deterministic recent close-price returns.
+- Generate stock-only long buy proposals for positive-momentum symbols.
+- Skip flat, negative-momentum, non-stock, and already-held symbols.
+- Keep per-symbol target weights compatible with the current risk policy.
+- Support safe local CLI selection with `python -m src.main dry-run --strategy momentum_v1`.
+- Tests must not require internet access, Alpaca credentials, or real market data.
 
 ## Phase 5 - Hermes structured proposal agent
 
