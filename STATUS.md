@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6D Hermes fixture strategies in local comparison completed.
+Phase 6E tournament scoring and ranking completed.
 
 Included:
 
@@ -25,10 +25,15 @@ Included:
 - `compare-strategies --save` local artifact output for JSON, CSV, and Markdown experiment summaries.
 - `compare-strategies --include-hermes-fixtures` support for adding local Hermes-shaped JSON fixture strategies to dry-run comparison and saved artifacts.
 - `compare-strategies --output-dir` support, defaulting to ignored runtime output under `data/experiments`.
+- Deterministic tournament scoring for `compare-strategies`.
+- Ranked comparison output sorted by best score first.
+- Beginner-readable score formula: `score = excess_return - abs(max_drawdown) - (rejected_trade_count * 0.01)`.
+- Deterministic ranking tie-breakers: higher excess return, lower drawdown, fewer rejected trades, then strategy ID alphabetical.
 - Saved comparison artifacts include experiment timestamp, fixture name, strategy ID, run ID, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
+- Saved comparison artifacts now also include rank, score, score formula, and score explanation.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
-- Beginner-readable comparison output with strategy ID, run ID, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
+- Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
 - `paper-status` CLI command with safe failure when credentials or paper settings are missing.
 - SQLite-backed benchmark and daily report generator.
@@ -59,7 +64,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6D Hermes fixture comparison artifacts, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6E tournament scoring/ranking artifacts, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

@@ -73,7 +73,15 @@ python -m src.main compare-strategies --fixture multi_day --include-hermes-fixtu
 python -m src.main compare-strategies --fixture flat --save --output-dir data/experiments
 ```
 
-This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware comparison table. The default `multi_day` fixture uses deterministic local SPY, SPY buy-and-hold, and momentum symbol prices so strategy return, SPY return, excess return, and max drawdown are non-zero where appropriate. Use `--fixture flat` for the old single-snapshot placeholder behavior.
+This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware ranked comparison table. The default `multi_day` fixture uses deterministic local SPY, SPY buy-and-hold, and momentum symbol prices so strategy return, SPY return, excess return, and max drawdown are non-zero where appropriate. Use `--fixture flat` for the old single-snapshot placeholder behavior.
+
+Tournament ranking uses a simple deterministic score:
+
+```text
+score = excess_return - abs(max_drawdown) - (rejected_trade_count * 0.01)
+```
+
+Higher scores rank first. Trade count is shown for context but does not automatically add points.
 
 Use `--include-hermes-fixtures` to add parser-only local Hermes JSON fixture strategies:
 

@@ -6,7 +6,16 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from src.reporting.strategy_comparison import ARTIFACT_COLUMNS, format_strategy_comparison, save_strategy_comparison_artifacts
+import pytest
+
+from src.reporting.strategy_comparison import (
+    ARTIFACT_COLUMNS,
+    SCORE_FORMULA,
+    format_strategy_comparison,
+    rank_strategy_reports,
+    save_strategy_comparison_artifacts,
+    score_strategy_report,
+)
 
 
 def test_compare_strategies_creates_separate_runs_for_all_local_strategies(tmp_path):
@@ -104,26 +113,75 @@ def test_compare_strategy_reports_are_isolated_by_run(tmp_path):
     assert all(data["benchmark_snapshots"] == 5 for data in by_strategy.values())
 
 
-def test_comparison_output_includes_required_metrics():
-    output = format_strategy_comparison(
+def test_score_calculation_uses_excess_return_drawdown_and_rejected_trades():
+    report = _comparison_report(
+        strategy_id="scored",
+        excess_return=0.05,
+        max_drawdown=-0.02,
+        rejected_trade_count=2,
+    )
+
+    assert score_strategy_report(report) == pytest.approx(0.01)
+
+
+def test_score_penalizes_larger_drawdowns():
+    mild_drawdown = _comparison_report(strategy_id="mild", excess_return=0.05, max_drawdown=-0.01)
+    large_drawdown = _comparison_report(strategy_id="large", excess_return=0.05, max_drawdown=-0.04)
+
+    assert score_strategy_report(mild_drawdown) > score_strategy_report(large_drawdown)
+
+
+def test_score_penalizes_rejected_trades():
+    clean = _comparison_report(strategy_id="clean", excess_return=0.05, rejected_trade_count=0)
+    rejected = _comparison_report(strategy_id="rejected", excess_return=0.05, rejected_trade_count=2)
+
+    assert score_strategy_report(clean) > score_strategy_report(rejected)
+
+
+def test_ranking_sorts_best_score_first():
+    ranked = rank_strategy_reports(
         [
-            {
-                "strategy_id": "cash_only",
-                "run_id": "run-123456",
-                "starting_equity": 10000,
-                "current_equity": 10000,
-                "strategy_return": 0.0,
-                "spy_return": 0.0,
-                "excess_return": 0.0,
-                "max_drawdown": 0.0,
-                "trade_count": 0,
-                "rejected_trade_count": 0,
-            }
+            _comparison_report(strategy_id="middle", excess_return=0.02),
+            _comparison_report(strategy_id="best", excess_return=0.04),
+            _comparison_report(strategy_id="worst", excess_return=-0.01),
         ]
     )
 
-    assert "strategy_id" in output
+    assert [row["strategy_id"] for row in ranked] == ["best", "middle", "worst"]
+    assert [row["rank"] for row in ranked] == [1, 2, 3]
+
+
+def test_ranking_uses_deterministic_tie_breakers():
+    ranked = rank_strategy_reports(
+        [
+            _comparison_report(strategy_id="z_alpha_last", excess_return=0.01, max_drawdown=0.0),
+            _comparison_report(strategy_id="a_alpha_first", excess_return=0.01, max_drawdown=0.0),
+            _comparison_report(strategy_id="higher_excess", excess_return=0.03, max_drawdown=-0.02),
+            _comparison_report(strategy_id="lower_drawdown", excess_return=0.03, max_drawdown=-0.01, rejected_trade_count=1),
+            _comparison_report(strategy_id="lower_excess", excess_return=0.02, max_drawdown=-0.01),
+        ]
+    )
+
+    assert [row["strategy_id"] for row in ranked] == [
+        "lower_drawdown",
+        "higher_excess",
+        "lower_excess",
+        "a_alpha_first",
+        "z_alpha_last",
+    ]
+
+
+def test_comparison_output_includes_required_metrics():
+    output = format_strategy_comparison(
+        [
+            _comparison_report(strategy_id="cash_only", run_id="run-123456")
+        ]
+    )
+
+    assert "rank" in output
+    assert "strategy ID" in output
     assert "run_id" in output
+    assert "score" in output
     assert "starting equity" in output
     assert "current equity" in output
     assert "strategy return" in output
@@ -132,6 +190,8 @@ def test_comparison_output_includes_required_metrics():
     assert "max drawdown" in output
     assert "trade count" in output
     assert "rejected trade count" in output
+    assert "Score formula:" in output
+    assert SCORE_FORMULA in output
 
 
 def test_save_strategy_comparison_artifacts_writes_json_with_required_fields(tmp_path):
@@ -151,6 +211,9 @@ def test_save_strategy_comparison_artifacts_writes_json_with_required_fields(tmp
     row = payload["results"][0]
     for field in ARTIFACT_COLUMNS:
         assert field in row
+    assert row["rank"] == 1
+    assert "score" in row
+    assert payload["score_formula"] == SCORE_FORMULA
 
 
 def test_save_strategy_comparison_artifacts_writes_csv_with_required_columns(tmp_path):
@@ -167,7 +230,9 @@ def test_save_strategy_comparison_artifacts_writes_csv_with_required_columns(tmp
 
     assert reader.fieldnames == list(ARTIFACT_COLUMNS)
     assert rows[0]["fixture_name"] == "multi_day"
+    assert rows[0]["rank"] == "1"
     assert rows[0]["strategy_id"] == "cash_only"
+    assert "score" in rows[0]
     assert rows[0]["trade_count"] == "0"
 
 
@@ -182,6 +247,9 @@ def test_save_strategy_comparison_artifacts_writes_markdown_summary(tmp_path):
     summary = artifacts.markdown_path.read_text(encoding="utf-8")
     assert "# Strategy Comparison Experiment" in summary
     assert "Fixture: flat" in summary
+    assert "Score formula:" in summary
+    assert "rank" in summary
+    assert "score" in summary
     assert "Strategy Comparison" in summary
     assert "cash_only" in summary
 
@@ -361,16 +429,37 @@ def test_compare_strategies_unknown_strategy_fails_cleanly(tmp_path):
 
 def _sample_reports():
     return [
-        {
-            "strategy_id": "cash_only",
-            "run_id": "run-123456",
-            "starting_equity": 10000,
-            "current_equity": 10000,
-            "strategy_return": 0.0,
-            "spy_return": 0.03,
-            "excess_return": -0.03,
-            "max_drawdown": 0.0,
-            "trade_count": 0,
-            "rejected_trade_count": 0,
-        }
+        _comparison_report(
+            strategy_id="cash_only",
+            run_id="run-123456",
+            strategy_return=0.0,
+            spy_return=0.03,
+            excess_return=-0.03,
+        )
     ]
+
+
+def _comparison_report(
+    strategy_id="test_strategy",
+    run_id="run-123456",
+    starting_equity=10000,
+    current_equity=10000,
+    strategy_return=0.0,
+    spy_return=0.0,
+    excess_return=0.0,
+    max_drawdown=0.0,
+    trade_count=0,
+    rejected_trade_count=0,
+):
+    return {
+        "strategy_id": strategy_id,
+        "run_id": run_id,
+        "starting_equity": starting_equity,
+        "current_equity": current_equity,
+        "strategy_return": strategy_return,
+        "spy_return": spy_return,
+        "excess_return": excess_return,
+        "max_drawdown": max_drawdown,
+        "trade_count": trade_count,
+        "rejected_trade_count": rejected_trade_count,
+    }

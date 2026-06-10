@@ -8,8 +8,10 @@ from pathlib import Path
 
 
 REQUIRED_COMPARISON_FIELDS = (
+    "rank",
     "strategy_id",
     "run_id",
+    "score",
     "starting_equity",
     "current_equity",
     "strategy_return",
@@ -18,8 +20,16 @@ REQUIRED_COMPARISON_FIELDS = (
     "max_drawdown",
     "trade_count",
     "rejected_trade_count",
+    "score_formula",
+    "score_explanation",
 )
 ARTIFACT_COLUMNS = ("experiment_timestamp", "fixture_name", *REQUIRED_COMPARISON_FIELDS)
+REJECTED_TRADE_SCORE_PENALTY = 0.01
+SCORE_FORMULA = "score = excess_return - abs(max_drawdown) - (rejected_trade_count * 0.01)"
+SCORE_EXPLANATION = (
+    "Higher is better. Excess return helps the score, while larger drawdowns and rejected trades lower it. "
+    "Trade count is shown for context but does not add points."
+)
 
 
 @dataclass(frozen=True)
@@ -30,9 +40,12 @@ class ComparisonArtifactPaths:
 
 
 def format_strategy_comparison(reports: list[dict]) -> str:
+    ranked_reports = rank_strategy_reports(reports)
     headers = (
-        "strategy_id",
+        "rank",
+        "strategy ID",
         "run_id",
+        "score",
         "starting equity",
         "current equity",
         "strategy return",
@@ -44,8 +57,10 @@ def format_strategy_comparison(reports: list[dict]) -> str:
     )
     rows = [
         (
+            str(report["rank"]),
             report["strategy_id"],
             report["run_id"],
+            _score(report["score"]),
             _money(report["starting_equity"]),
             _money(report["current_equity"]),
             _percent(report["strategy_return"]),
@@ -55,7 +70,7 @@ def format_strategy_comparison(reports: list[dict]) -> str:
             str(report["trade_count"]),
             str(report["rejected_trade_count"]),
         )
-        for report in reports
+        for report in ranked_reports
     ]
 
     widths = [
@@ -64,6 +79,8 @@ def format_strategy_comparison(reports: list[dict]) -> str:
     ]
     lines = [
         "Strategy Comparison",
+        f"Score formula: {SCORE_FORMULA}",
+        f"Score explanation: {SCORE_EXPLANATION}",
         _format_row(headers, widths),
         _format_row(tuple("-" * width for width in widths), widths),
     ]
@@ -83,6 +100,7 @@ def save_strategy_comparison_artifacts(
     safe_fixture_name = _safe_filename_part(fixture_name)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    ranked_reports = rank_strategy_reports(reports)
 
     rows = [
         {
@@ -90,7 +108,7 @@ def save_strategy_comparison_artifacts(
             "fixture_name": fixture_name,
             **{field: report[field] for field in REQUIRED_COMPARISON_FIELDS},
         }
-        for report in reports
+        for report in ranked_reports
     ]
 
     base_name = f"strategy_comparison_{safe_fixture_name}_{filename_timestamp}"
@@ -103,6 +121,8 @@ def save_strategy_comparison_artifacts(
             {
                 "experiment_timestamp": timestamp_text,
                 "fixture_name": fixture_name,
+                "score_formula": SCORE_FORMULA,
+                "score_explanation": SCORE_EXPLANATION,
                 "results": rows,
             },
             indent=2,
@@ -124,9 +144,11 @@ def save_strategy_comparison_artifacts(
                 "",
                 f"- Experiment timestamp: {timestamp_text}",
                 f"- Fixture: {fixture_name}",
+                f"- Score formula: `{SCORE_FORMULA}`",
+                f"- Score explanation: {SCORE_EXPLANATION}",
                 "",
                 "```text",
-                format_strategy_comparison(reports),
+                format_strategy_comparison(ranked_reports),
                 "```",
                 "",
             ]
@@ -139,6 +161,41 @@ def save_strategy_comparison_artifacts(
         csv_path=csv_path,
         markdown_path=markdown_path,
     )
+
+
+def rank_strategy_reports(reports: list[dict]) -> list[dict]:
+    scored_reports = [
+        {
+            **report,
+            "score": score_strategy_report(report),
+            "score_formula": SCORE_FORMULA,
+            "score_explanation": SCORE_EXPLANATION,
+        }
+        for report in reports
+    ]
+    ranked_reports = sorted(
+        scored_reports,
+        key=lambda report: (
+            -report["score"],
+            -report["excess_return"],
+            abs(report["max_drawdown"]),
+            report["rejected_trade_count"],
+            report["strategy_id"],
+        ),
+    )
+    return [
+        {
+            **report,
+            "rank": index,
+        }
+        for index, report in enumerate(ranked_reports, start=1)
+    ]
+
+
+def score_strategy_report(report: dict) -> float:
+    max_drawdown_penalty = abs(report["max_drawdown"])
+    rejected_trade_penalty = report["rejected_trade_count"] * REJECTED_TRADE_SCORE_PENALTY
+    return round(report["excess_return"] - max_drawdown_penalty - rejected_trade_penalty, 10)
 
 
 def _format_row(values: tuple[str, ...], widths: list[int]) -> str:
@@ -155,3 +212,7 @@ def _money(value: float) -> str:
 
 def _percent(value: float) -> str:
     return f"{value:.2%}"
+
+
+def _score(value: float) -> str:
+    return f"{value:.4f}"

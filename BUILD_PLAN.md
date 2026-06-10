@@ -199,6 +199,30 @@ Not included:
 - Hermes runtime wiring.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6E - Tournament scoring and ranking
+
+Status: complete for deterministic local tournament scoring.
+
+Included:
+
+- `compare-strategies` assigns each compared strategy a deterministic score.
+- Score formula: `score = excess_return - abs(max_drawdown) - (rejected_trade_count * 0.01)`.
+- Ranking sorts best score first.
+- Deterministic tie-breakers use higher excess return, lower drawdown, fewer rejected trades, then strategy ID alphabetical.
+- Trade count is shown for context but does not automatically reward overtrading.
+- Beginner-readable terminal output includes rank, score, score formula, strategy ID, run ID, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
+- Saved JSON, CSV, and Markdown comparison artifacts include rank, score, score formula, score explanation, and prior comparison metrics.
+- Tests cover score calculation, drawdown penalty behavior, rejected trade penalty behavior, ranking order, deterministic tie-breakers, CLI output, and saved JSON/CSV/Markdown scoring fields.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold
