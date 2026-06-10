@@ -67,9 +67,19 @@ python -m src.main dry-run --strategy momentum_v1
 ```bash
 python -m src.main compare-strategies
 python -m src.main compare-strategies --fixture multi_day
+python -m src.main compare-strategies --fixture multi_day --save
+python -m src.main compare-strategies --fixture flat --save --output-dir data/experiments
 ```
 
 This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware comparison table. The default `multi_day` fixture uses deterministic local SPY, SPY buy-and-hold, and momentum symbol prices so strategy return, SPY return, excess return, and max drawdown are non-zero where appropriate. Use `--fixture flat` for the old single-snapshot placeholder behavior.
+
+Use `--save` to write durable local research artifacts under `data/experiments` by default:
+
+- JSON for machine-readable review.
+- CSV for spreadsheet review.
+- Markdown for human-readable experiment notes.
+
+Runtime experiment artifacts are ignored by git.
 
 ## Report examples
 

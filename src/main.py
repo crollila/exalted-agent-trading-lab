@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
 from src.execution.local_runner import run_strategy_dry_run
 from src.reporting.report_generator import format_report, generate_daily_report
-from src.reporting.strategy_comparison import format_strategy_comparison
+from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
 from src.strategies.base import Strategy
 from src.strategies.cash_only import CashOnlyStrategy
 from src.strategies.momentum_v1 import MomentumV1Strategy
@@ -86,6 +87,8 @@ def run_report(run_id: str | None = None) -> None:
 def run_compare_strategies(
     strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES,
     fixture: str = "multi_day",
+    save: bool = False,
+    output_dir: Path | str = Path("data/experiments"),
 ) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
@@ -101,6 +104,16 @@ def run_compare_strategies(
         reports.append(report_result.report)
 
     print(format_strategy_comparison(reports))
+    if save:
+        artifacts = save_strategy_comparison_artifacts(
+            reports=reports,
+            fixture_name=fixture,
+            output_dir=output_dir,
+        )
+        print("Saved comparison artifacts:")
+        print(f"JSON: {artifacts.json_path}")
+        print(f"CSV: {artifacts.csv_path}")
+        print(f"Markdown: {artifacts.markdown_path}")
 
 
 def main() -> None:
@@ -143,6 +156,17 @@ def main() -> None:
         default="multi_day",
         help="Deterministic local simulation fixture for comparison reports. Defaults to multi_day.",
     )
+    compare_parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save JSON, CSV, and Markdown comparison artifacts to the output directory.",
+    )
+    compare_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory for saved comparison artifacts. Defaults to data/experiments.",
+    )
 
     args = parser.parse_args()
 
@@ -155,7 +179,12 @@ def main() -> None:
     elif args.command == "report":
         run_report(run_id=args.run_id)
     elif args.command == "compare-strategies":
-        run_compare_strategies(strategy_names=tuple(args.strategies), fixture=args.fixture)
+        run_compare_strategies(
+            strategy_names=tuple(args.strategies),
+            fixture=args.fixture,
+            save=args.save,
+            output_dir=args.output_dir,
+        )
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

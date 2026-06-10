@@ -153,6 +153,27 @@ Not included:
 - Hermes runtime wiring.
 - Cash yield modeling.
 
+### Phase 6C - Comparison artifacts and experiment logs
+
+Status: complete for durable local research artifacts.
+
+Included:
+
+- `compare-strategies --save` writes JSON, CSV, and Markdown artifacts.
+- `compare-strategies --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- Artifact rows include experiment timestamp, fixture name, strategy ID, run ID, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
+- Missing output directories are created automatically.
+- Runtime artifacts under `data/experiments` and `data/reports` are ignored by git.
+- Tests cover JSON fields, CSV columns, Markdown summary, missing output directory creation, no-credential operation, unchanged terminal-only comparison behavior, and saved artifacts for `multi_day` and `flat` fixtures.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+
 Strategies:
 
 - SPY buy-and-hold

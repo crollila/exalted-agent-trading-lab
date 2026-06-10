@@ -30,6 +30,20 @@ $10,000 paper
 
 SPY
 
+## Comparison artifacts
+
+Save local comparison artifacts with:
+
+```bash
+python -m src.main compare-strategies --fixture multi_day --save
+```
+
+Default artifact directory: `data/experiments`
+
+| Timestamp | Fixture | JSON | CSV | Markdown | Notes |
+|---|---|---|---|---|---|
+| YYYY-MM-DDTHH:MM:SSZ | multi_day | path/to/results.json | path/to/results.csv | path/to/results.md | Initial comparison |
+
 ## Hypothesis
 
 Example:

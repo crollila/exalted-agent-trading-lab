@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import csv
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
 
 REQUIRED_COMPARISON_FIELDS = (
     "strategy_id",
@@ -13,6 +19,14 @@ REQUIRED_COMPARISON_FIELDS = (
     "trade_count",
     "rejected_trade_count",
 )
+ARTIFACT_COLUMNS = ("experiment_timestamp", "fixture_name", *REQUIRED_COMPARISON_FIELDS)
+
+
+@dataclass(frozen=True)
+class ComparisonArtifactPaths:
+    json_path: Path
+    csv_path: Path
+    markdown_path: Path
 
 
 def format_strategy_comparison(reports: list[dict]) -> str:
@@ -57,8 +71,82 @@ def format_strategy_comparison(reports: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def save_strategy_comparison_artifacts(
+    reports: list[dict],
+    fixture_name: str,
+    output_dir: Path | str,
+    experiment_timestamp: datetime | None = None,
+) -> ComparisonArtifactPaths:
+    timestamp = experiment_timestamp or datetime.now(timezone.utc)
+    timestamp_text = timestamp.astimezone(timezone.utc).isoformat()
+    filename_timestamp = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_fixture_name = _safe_filename_part(fixture_name)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    rows = [
+        {
+            "experiment_timestamp": timestamp_text,
+            "fixture_name": fixture_name,
+            **{field: report[field] for field in REQUIRED_COMPARISON_FIELDS},
+        }
+        for report in reports
+    ]
+
+    base_name = f"strategy_comparison_{safe_fixture_name}_{filename_timestamp}"
+    json_path = output_path / f"{base_name}.json"
+    csv_path = output_path / f"{base_name}.csv"
+    markdown_path = output_path / f"{base_name}.md"
+
+    json_path.write_text(
+        json.dumps(
+            {
+                "experiment_timestamp": timestamp_text,
+                "fixture_name": fixture_name,
+                "results": rows,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=ARTIFACT_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    markdown_path.write_text(
+        "\n".join(
+            [
+                "# Strategy Comparison Experiment",
+                "",
+                f"- Experiment timestamp: {timestamp_text}",
+                f"- Fixture: {fixture_name}",
+                "",
+                "```text",
+                format_strategy_comparison(reports),
+                "```",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    return ComparisonArtifactPaths(
+        json_path=json_path,
+        csv_path=csv_path,
+        markdown_path=markdown_path,
+    )
+
+
 def _format_row(values: tuple[str, ...], widths: list[int]) -> str:
     return " | ".join(value.ljust(width) for value, width in zip(values, widths))
+
+
+def _safe_filename_part(value: str) -> str:
+    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in value)
 
 
 def _money(value: float) -> str:
@@ -67,4 +155,3 @@ def _money(value: float) -> str:
 
 def _percent(value: float) -> str:
     return f"{value:.2%}"
-

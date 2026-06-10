@@ -1,9 +1,12 @@
+import csv
+import json
 import os
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 
-from src.reporting.strategy_comparison import format_strategy_comparison
+from src.reporting.strategy_comparison import ARTIFACT_COLUMNS, format_strategy_comparison, save_strategy_comparison_artifacts
 
 
 def test_compare_strategies_creates_separate_runs_for_all_local_strategies(tmp_path):
@@ -131,6 +134,124 @@ def test_comparison_output_includes_required_metrics():
     assert "rejected trade count" in output
 
 
+def test_save_strategy_comparison_artifacts_writes_json_with_required_fields(tmp_path):
+    output_dir = tmp_path / "missing" / "experiments"
+    artifacts = save_strategy_comparison_artifacts(
+        reports=_sample_reports(),
+        fixture_name="multi_day",
+        output_dir=output_dir,
+        experiment_timestamp=datetime(2026, 6, 10, 20, 0, tzinfo=timezone.utc),
+    )
+
+    assert output_dir.exists()
+    payload = json.loads(artifacts.json_path.read_text(encoding="utf-8"))
+    assert payload["experiment_timestamp"] == "2026-06-10T20:00:00+00:00"
+    assert payload["fixture_name"] == "multi_day"
+    assert len(payload["results"]) == 1
+    row = payload["results"][0]
+    for field in ARTIFACT_COLUMNS:
+        assert field in row
+
+
+def test_save_strategy_comparison_artifacts_writes_csv_with_required_columns(tmp_path):
+    artifacts = save_strategy_comparison_artifacts(
+        reports=_sample_reports(),
+        fixture_name="multi_day",
+        output_dir=tmp_path / "experiments",
+        experiment_timestamp=datetime(2026, 6, 10, 20, 0, tzinfo=timezone.utc),
+    )
+
+    with artifacts.csv_path.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        rows = list(reader)
+
+    assert reader.fieldnames == list(ARTIFACT_COLUMNS)
+    assert rows[0]["fixture_name"] == "multi_day"
+    assert rows[0]["strategy_id"] == "cash_only"
+    assert rows[0]["trade_count"] == "0"
+
+
+def test_save_strategy_comparison_artifacts_writes_markdown_summary(tmp_path):
+    artifacts = save_strategy_comparison_artifacts(
+        reports=_sample_reports(),
+        fixture_name="flat",
+        output_dir=tmp_path / "experiments",
+        experiment_timestamp=datetime(2026, 6, 10, 20, 0, tzinfo=timezone.utc),
+    )
+
+    summary = artifacts.markdown_path.read_text(encoding="utf-8")
+    assert "# Strategy Comparison Experiment" in summary
+    assert "Fixture: flat" in summary
+    assert "Strategy Comparison" in summary
+    assert "cash_only" in summary
+
+
+def test_compare_strategies_save_writes_multi_day_artifacts_without_credentials(tmp_path):
+    database_path = tmp_path / "comparison_save_multi_day.sqlite3"
+    output_dir = tmp_path / "artifacts" / "multi_day"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--fixture",
+            "multi_day",
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Strategy Comparison" in result.stdout
+    assert "Saved comparison artifacts:" in result.stdout
+    assert len(list(output_dir.glob("*.json"))) == 1
+    assert len(list(output_dir.glob("*.csv"))) == 1
+    assert len(list(output_dir.glob("*.md"))) == 1
+
+
+def test_compare_strategies_save_writes_flat_artifacts_without_credentials(tmp_path):
+    database_path = tmp_path / "comparison_save_flat.sqlite3"
+    output_dir = tmp_path / "artifacts" / "flat"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--fixture",
+            "flat",
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Saved comparison artifacts:" in result.stdout
+    payload = json.loads(next(output_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert payload["fixture_name"] == "flat"
+
+
 def test_compare_strategies_unknown_strategy_fails_cleanly(tmp_path):
     database_path = tmp_path / "unknown_comparison.sqlite3"
     env = os.environ.copy()
@@ -147,3 +268,20 @@ def test_compare_strategies_unknown_strategy_fails_cleanly(tmp_path):
     assert result.returncode != 0
     assert "invalid choice" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def _sample_reports():
+    return [
+        {
+            "strategy_id": "cash_only",
+            "run_id": "run-123456",
+            "starting_equity": 10000,
+            "current_equity": 10000,
+            "strategy_return": 0.0,
+            "spy_return": 0.03,
+            "excess_return": -0.03,
+            "max_drawdown": 0.0,
+            "trade_count": 0,
+            "rejected_trade_count": 0,
+        }
+    ]
