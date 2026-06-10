@@ -44,6 +44,8 @@ Requirements:
 
 Goal: compare the strategy to SPY every day.
 
+Status: complete for deterministic SQLite-backed daily benchmark reports.
+
 Metrics:
 
 - starting equity

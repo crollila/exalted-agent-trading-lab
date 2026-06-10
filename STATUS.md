@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 2 safe Alpaca paper integration reviewed and completed.
+Phase 3 benchmark reporting reviewed and completed.
 
 Included:
 
@@ -16,8 +16,9 @@ Included:
 - Dry-run order executor that only uses risk-approved quantities.
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
 - `paper-status` CLI command with safe failure when credentials or paper settings are missing.
-- Benchmark and daily report helpers.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, and performance.
+- SQLite-backed benchmark and daily report generator.
+- `report` CLI command for beginner-readable SPY comparison metrics.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -36,7 +37,7 @@ Current allowed mode:
 
 ## Next step
 
-Review the Phase 2 results, then continue with benchmark/reporting improvements or broader paper-trading orchestration when ready.
+Review the Phase 3 results, then continue with broader paper-trading orchestration or deterministic strategy improvements when ready.
 
 ## Project manager rule
 

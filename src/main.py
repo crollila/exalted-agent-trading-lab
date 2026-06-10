@@ -16,6 +16,7 @@ from src.execution.order_executor import OrderExecutor
 from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
 from src.portfolio.portfolio_state import PortfolioState
 from src.reporting.benchmark_report import BenchmarkReport
+from src.reporting.report_generator import format_report, generate_daily_report
 from src.risk.risk_rules import RiskRules
 from src.risk.trade_validator import TradeValidator
 
@@ -118,6 +119,17 @@ def _read_value(obj: object, name: str) -> object:
     return getattr(obj, name, "unknown")
 
 
+def run_report() -> None:
+    settings = Settings.from_env()
+    initialize_database(settings.database_path)
+    result = generate_daily_report(settings.database_path)
+    if not result.ok or result.report is None:
+        print(f"Report unavailable: {result.message}")
+        raise SystemExit(1)
+
+    print(format_report(result.report))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -125,6 +137,7 @@ def main() -> None:
     subparsers.add_parser("init-db", help="Initialize SQLite database")
     subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
     subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
+    subparsers.add_parser("report", help="Generate a local benchmark report")
 
     args = parser.parse_args()
 
@@ -134,6 +147,8 @@ def main() -> None:
         run_dry_run()
     elif args.command == "paper-status":
         run_paper_status()
+    elif args.command == "report":
+        run_report()
     else:
         raise ValueError(f"Unknown command: {args.command}")
 
