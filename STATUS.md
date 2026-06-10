@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 1 implementation reviewed and completed.
+Phase 2 safe Alpaca paper integration reviewed and completed.
 
 Included:
 
@@ -14,8 +14,10 @@ Included:
 - SPY buy-and-hold baseline.
 - Momentum placeholder strategy.
 - Dry-run order executor that only uses risk-approved quantities.
+- Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
+- `paper-status` CLI command with safe failure when credentials or paper settings are missing.
 - Benchmark and daily report helpers.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -24,7 +26,8 @@ Included:
 Current allowed mode:
 
 - Dry-run only by default.
-- Alpaca paper integration is stubbed/wrapped, not live-money.
+- Alpaca paper integration is wrapped and requires `ALPACA_PAPER=true`.
+- Alpaca base URL must be exactly `https://paper-api.alpaca.markets`.
 - No live trading.
 - No options.
 - No shorting.
@@ -33,7 +36,7 @@ Current allowed mode:
 
 ## Next step
 
-Review the Phase 1 results, then continue with Phase 2 only when ready to add Alpaca paper-account integration.
+Review the Phase 2 results, then continue with benchmark/reporting improvements or broader paper-trading orchestration when ready.
 
 ## Project manager rule
 

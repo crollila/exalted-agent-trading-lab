@@ -46,10 +46,12 @@ class OrderRequest(BaseModel):
     proposal_id: str
     symbol: str
     action: TradeAction
+    asset_class: AssetClass = AssetClass.STOCK
     quantity: float = Field(gt=0.0)
     order_type: Literal["market", "limit"] = "market"
     limit_price: float | None = None
     dry_run: bool = True
+    risk_approved: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

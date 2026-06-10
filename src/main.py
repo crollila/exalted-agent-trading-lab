@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timezone
 
+from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.brokers.order_models import BenchmarkSnapshot, PortfolioSnapshot
 from src.config.settings import Settings
 from src.db.database import (
@@ -92,12 +93,38 @@ def run_dry_run() -> None:
     print(f"Dry run complete. Proposals processed: {len(proposals)}. Daily report logged.")
 
 
+def run_paper_status() -> None:
+    settings = Settings.from_env()
+
+    try:
+        client = AlpacaClientWrapper(settings=settings)
+        account = client.get_account()
+        positions = client.get_positions()
+        market_open = client.is_market_open()
+    except (RuntimeError, ValueError) as exc:
+        print(f"Paper status unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(f"Account equity: {_read_value(account, 'equity')}")
+    print(f"Cash: {_read_value(account, 'cash')}")
+    print(f"Buying power: {_read_value(account, 'buying_power')}")
+    print(f"Market status: {'open' if market_open else 'closed'}")
+    print(f"Positions count: {len(positions)}")
+
+
+def _read_value(obj: object, name: str) -> object:
+    if isinstance(obj, dict):
+        return obj.get(name, "unknown")
+    return getattr(obj, name, "unknown")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("init-db", help="Initialize SQLite database")
     subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
+    subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
 
     args = parser.parse_args()
 
@@ -105,6 +132,8 @@ def main() -> None:
         run_init_db()
     elif args.command == "dry-run":
         run_dry_run()
+    elif args.command == "paper-status":
+        run_paper_status()
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

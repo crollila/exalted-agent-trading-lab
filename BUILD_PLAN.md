@@ -28,6 +28,8 @@ Requirements:
 
 Goal: connect to Alpaca paper account only.
 
+Status: complete for safe paper account/status wrapper and approved paper-order submission path.
+
 Requirements:
 
 - Fetch account.
@@ -36,6 +38,7 @@ Requirements:
 - Submit approved paper orders only.
 - Never submit live orders.
 - Tests must not require real credentials.
+- Tests mock Alpaca completely.
 
 ## Phase 3 - Benchmark reports
 

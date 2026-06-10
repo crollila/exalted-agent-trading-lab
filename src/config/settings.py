@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 class Settings:
     alpaca_api_key: str | None
     alpaca_secret_key: str | None
-    alpaca_paper: bool
+    alpaca_paper: bool | None
     alpaca_base_url: str
     database_path: Path
     dry_run: bool
@@ -24,12 +24,13 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv()
+        alpaca_paper_raw = os.getenv("ALPACA_PAPER")
 
         return cls(
             alpaca_api_key=os.getenv("ALPACA_API_KEY"),
             alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY"),
-            alpaca_paper=os.getenv("ALPACA_PAPER", "true").lower() == "true",
-            alpaca_base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
+            alpaca_paper=None if alpaca_paper_raw is None else alpaca_paper_raw.lower() == "true",
+            alpaca_base_url=os.getenv("ALPACA_BASE_URL", ""),
             database_path=Path(os.getenv("DATABASE_PATH", "data/trading_lab.sqlite3")),
             dry_run=os.getenv("DRY_RUN", "true").lower() == "true",
             starting_equity=float(os.getenv("STARTING_EQUITY", "10000")),

@@ -38,6 +38,8 @@ class OrderExecutor:
             proposal_id=proposal.proposal_id,
             symbol=proposal.symbol,
             action=proposal.action,
+            asset_class=proposal.asset_class,
             quantity=decision.approved_quantity,
             dry_run=self.dry_run,
+            risk_approved=True,
         )
