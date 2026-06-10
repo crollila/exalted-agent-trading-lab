@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 4 simple deterministic momentum strategy completed.
+Phase 5 Hermes structured proposal parser completed.
 
 Included:
 
@@ -13,6 +13,8 @@ Included:
 - Strategy interface.
 - SPY buy-and-hold baseline.
 - Simple deterministic momentum baseline strategy.
+- Strict Hermes JSON proposal parser that converts valid local payloads into `TradeProposal` objects only.
+- Safe Hermes parser rejection for invalid JSON, missing fields, empty symbols, non-buy actions, non-stock assets, options, invalid target weights, empty theses, out-of-range confidence, extra fields, and missing local estimated prices.
 - Dry-run order executor that only uses risk-approved quantities.
 - `dry-run --strategy` CLI selection for known local deterministic strategies.
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
@@ -38,10 +40,12 @@ Current allowed mode:
 - No shorting.
 - No margin.
 - No LLM direct execution.
+- Hermes is parser-only and is not wired into dry-run, paper trading, Alpaca, or any order path.
+- Hermes parser tests require no network, credentials, Ollama, LM Studio, hosted LLM, or real market data.
 
 ## Next step
 
-Review the Phase 4 simple momentum baseline, then continue with multi-strategy comparison or Hermes proposal generation when ready.
+Review the Phase 5 parser, then continue with explicit Hermes runtime prompting or multi-strategy comparison when ready.
 
 ## Project manager rule
 

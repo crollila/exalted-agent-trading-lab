@@ -95,13 +95,17 @@ Requirements:
 
 Goal: add Hermes as a proposal generator only.
 
+Status: complete for strict local JSON parsing into `TradeProposal` objects.
+
 Rules:
 
 - Hermes outputs strict JSON.
 - Hermes cannot place orders.
 - Hermes cannot override risk.
 - Invalid JSON is rejected.
-- Every proposal is logged.
+- Every proposal must be logged before any future Hermes execution integration processes it.
+- Phase 5 does not connect to Ollama, LM Studio, hosted LLMs, Alpaca, or dry-run execution.
+- Phase 5 parser tests use local fixtures only.
 
 ## Phase 6 - Multi-strategy tournament
 

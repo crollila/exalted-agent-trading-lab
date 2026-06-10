@@ -5,12 +5,14 @@ class HermesClient:
     '''
     Placeholder Hermes client.
 
-    Phase 5 goal:
+    Future runtime goal:
     - connect to local Hermes through Ollama, LM Studio, or another endpoint
     - request strict JSON
-    - validate response with pydantic schemas
     - never place trades directly
+
+    Phase 5 only adds local strict JSON parsing. Tests must not require Hermes,
+    Ollama, LM Studio, hosted LLMs, network access, or API keys.
     '''
 
     def generate_trade_proposals(self, prompt: str) -> dict:
-        raise NotImplementedError("Hermes integration comes in Phase 5.")
+        raise NotImplementedError("Hermes runtime integration is not enabled.")
