@@ -57,6 +57,21 @@ Metrics:
 - trade count
 - rejected trade count
 
+## Phase 3.5 - Run-aware reports and run records
+
+Goal: make each dry-run or future paper-trading session independently reportable.
+
+Status: complete.
+
+Requirements:
+
+- Create formal run records.
+- Link dry-run portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports to a run ID.
+- Make `python -m src.main report` default to the latest run instead of the full database.
+- Support explicit run reports with `python -m src.main report --run-id <id>`.
+- Keep all Phase 3 metrics isolated by run.
+- Tests must not require internet access, Alpaca credentials, or real market data.
+
 ## Phase 4 - Simple momentum strategy
 
 Goal: add a deterministic, non-LLM baseline strategy.

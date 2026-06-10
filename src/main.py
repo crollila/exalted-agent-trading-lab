@@ -7,6 +7,8 @@ from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.brokers.order_models import BenchmarkSnapshot, PortfolioSnapshot
 from src.config.settings import Settings
 from src.db.database import (
+    complete_run,
+    create_run,
     initialize_database,
     insert_benchmark_snapshot,
     insert_daily_report,
@@ -39,6 +41,12 @@ def run_dry_run() -> None:
     )
 
     strategy = SpyBuyHoldStrategy()
+    run_id = create_run(
+        settings.database_path,
+        strategy_id=strategy.strategy_id,
+        strategy_name=strategy.name,
+        starting_equity=settings.starting_equity,
+    )
     proposals = strategy.generate_proposals(portfolio)
 
     validator = TradeValidator(
@@ -49,49 +57,58 @@ def run_dry_run() -> None:
             max_new_positions_per_day=settings.max_new_positions_per_day,
         )
     )
-    executor = OrderExecutor(database_path=settings.database_path, dry_run=True)
+    executor = OrderExecutor(database_path=settings.database_path, dry_run=True, run_id=run_id)
 
-    insert_portfolio_snapshot(
-        settings.database_path,
-        PortfolioSnapshot(
-            strategy_id=strategy.strategy_id,
-            equity=portfolio.equity,
-            cash=portfolio.cash,
-            timestamp=portfolio.timestamp,
-        ),
-    )
+    try:
+        insert_portfolio_snapshot(
+            settings.database_path,
+            PortfolioSnapshot(
+                strategy_id=strategy.strategy_id,
+                equity=portfolio.equity,
+                cash=portfolio.cash,
+                timestamp=portfolio.timestamp,
+            ),
+            run_id=run_id,
+        )
 
-    for proposal in proposals:
-        decision = validator.validate(proposal=proposal, portfolio=portfolio)
-        executor.handle_decision(proposal=proposal, decision=decision)
+        for proposal in proposals:
+            decision = validator.validate(proposal=proposal, portfolio=portfolio)
+            executor.handle_decision(proposal=proposal, decision=decision)
 
-    starting_spy_price = 500.0
-    current_spy_price = 500.0
-    report = BenchmarkReport(
-        starting_equity=settings.starting_equity,
-        current_strategy_equity=portfolio.equity,
-        starting_spy_price=starting_spy_price,
-        current_spy_price=current_spy_price,
-    ).to_dict()
-
-    insert_benchmark_snapshot(
-        settings.database_path,
-        BenchmarkSnapshot(
+        starting_spy_price = 500.0
+        current_spy_price = 500.0
+        report = BenchmarkReport(
             starting_equity=settings.starting_equity,
             current_strategy_equity=portfolio.equity,
-            starting_benchmark_price=starting_spy_price,
-            current_benchmark_price=current_spy_price,
-            timestamp=portfolio.timestamp,
-        ),
-    )
-    insert_daily_report(
-        settings.database_path,
-        strategy_id=strategy.strategy_id,
-        report_date=date.today().isoformat(),
-        report=report,
-    )
+            starting_spy_price=starting_spy_price,
+            current_spy_price=current_spy_price,
+        ).to_dict()
+        report["run_id"] = run_id
 
-    print(f"Dry run complete. Proposals processed: {len(proposals)}. Daily report logged.")
+        insert_benchmark_snapshot(
+            settings.database_path,
+            BenchmarkSnapshot(
+                starting_equity=settings.starting_equity,
+                current_strategy_equity=portfolio.equity,
+                starting_benchmark_price=starting_spy_price,
+                current_benchmark_price=current_spy_price,
+                timestamp=portfolio.timestamp,
+            ),
+            run_id=run_id,
+        )
+        insert_daily_report(
+            settings.database_path,
+            strategy_id=strategy.strategy_id,
+            report_date=date.today().isoformat(),
+            report=report,
+            run_id=run_id,
+        )
+        complete_run(settings.database_path, run_id)
+    except Exception:
+        complete_run(settings.database_path, run_id, status="failed")
+        raise
+
+    print(f"Dry run complete. Run ID: {run_id}. Proposals processed: {len(proposals)}. Daily report logged.")
 
 
 def run_paper_status() -> None:
@@ -119,10 +136,10 @@ def _read_value(obj: object, name: str) -> object:
     return getattr(obj, name, "unknown")
 
 
-def run_report() -> None:
+def run_report(run_id: str | None = None) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
-    result = generate_daily_report(settings.database_path)
+    result = generate_daily_report(settings.database_path, run_id=run_id)
     if not result.ok or result.report is None:
         print(f"Report unavailable: {result.message}")
         raise SystemExit(1)
@@ -137,7 +154,16 @@ def main() -> None:
     subparsers.add_parser("init-db", help="Initialize SQLite database")
     subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
     subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
-    subparsers.add_parser("report", help="Generate a local benchmark report")
+    report_parser = subparsers.add_parser("report", help="Generate a local benchmark report")
+    report_parser.add_argument(
+        "--run-id",
+        help="Generate a report for a specific run ID. Defaults to the latest run.",
+    )
+    report_parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Generate a report for the latest run. This is the default.",
+    )
 
     args = parser.parse_args()
 
@@ -148,7 +174,7 @@ def main() -> None:
     elif args.command == "paper-status":
         run_paper_status()
     elif args.command == "report":
-        run_report()
+        run_report(run_id=args.run_id)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

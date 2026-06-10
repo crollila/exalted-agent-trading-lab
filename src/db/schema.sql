@@ -17,24 +17,29 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     strategy_id TEXT,
     equity REAL NOT NULL,
     cash REAL NOT NULL,
-    timestamp TEXT NOT NULL
+    timestamp TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
 );
 
 CREATE TABLE IF NOT EXISTS positions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     strategy_id TEXT,
     symbol TEXT NOT NULL,
     quantity REAL NOT NULL,
     market_value REAL NOT NULL,
     average_entry_price REAL,
-    timestamp TEXT NOT NULL
+    timestamp TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
 );
 
 CREATE TABLE IF NOT EXISTS trade_proposals (
     proposal_id TEXT PRIMARY KEY,
+    run_id TEXT,
     strategy_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
     action TEXT NOT NULL,
@@ -44,22 +49,26 @@ CREATE TABLE IF NOT EXISTS trade_proposals (
     estimated_price REAL NOT NULL,
     thesis TEXT NOT NULL,
     confidence REAL NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
 );
 
 CREATE TABLE IF NOT EXISTS risk_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     proposal_id TEXT NOT NULL,
     approved INTEGER NOT NULL,
     reasons_json TEXT NOT NULL,
     approved_quantity REAL,
     estimated_trade_value REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id),
     FOREIGN KEY(proposal_id) REFERENCES trade_proposals(proposal_id)
 );
 
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     proposal_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
     action TEXT NOT NULL,
@@ -69,23 +78,28 @@ CREATE TABLE IF NOT EXISTS orders (
     dry_run INTEGER NOT NULL,
     submitted INTEGER NOT NULL,
     created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id),
     FOREIGN KEY(proposal_id) REFERENCES trade_proposals(proposal_id)
 );
 
 CREATE TABLE IF NOT EXISTS benchmark_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     benchmark_symbol TEXT NOT NULL,
     starting_equity REAL NOT NULL,
     current_strategy_equity REAL NOT NULL,
     starting_benchmark_price REAL NOT NULL,
     current_benchmark_price REAL NOT NULL,
-    timestamp TEXT NOT NULL
+    timestamp TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
 );
 
 CREATE TABLE IF NOT EXISTS daily_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     strategy_id TEXT NOT NULL,
     report_date TEXT NOT NULL,
     report_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
 );

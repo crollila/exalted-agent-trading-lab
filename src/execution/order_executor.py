@@ -7,13 +7,14 @@ from src.db.database import insert_order, insert_risk_decision, insert_trade_pro
 
 
 class OrderExecutor:
-    def __init__(self, database_path: Path | str, dry_run: bool = True):
+    def __init__(self, database_path: Path | str, dry_run: bool = True, run_id: str | None = None):
         self.database_path = Path(database_path)
         self.dry_run = dry_run
+        self.run_id = run_id
 
     def handle_decision(self, proposal: TradeProposal, decision: RiskDecision) -> None:
-        insert_trade_proposal(self.database_path, proposal)
-        insert_risk_decision(self.database_path, decision)
+        insert_trade_proposal(self.database_path, proposal, run_id=self.run_id)
+        insert_risk_decision(self.database_path, decision, run_id=self.run_id)
 
         if not decision.approved:
             return
@@ -28,7 +29,7 @@ class OrderExecutor:
             # Live-money trading must remain disabled.
             submitted = False
 
-        insert_order(self.database_path, order, submitted=submitted)
+        insert_order(self.database_path, order, submitted=submitted, run_id=self.run_id)
 
     def _proposal_to_order(self, proposal: TradeProposal, decision: RiskDecision) -> OrderRequest:
         if decision.approved_quantity is None or decision.approved_quantity <= 0:

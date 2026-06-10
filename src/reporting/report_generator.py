@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from src.db.database import get_connection, insert_daily_report
+from src.db.database import get_connection, get_latest_run_id, insert_daily_report, run_exists
 from src.portfolio.performance import benchmark_equity_from_price, excess_return, max_drawdown, pct_return
 
 
@@ -15,24 +15,45 @@ class ReportResult:
     message: str = ""
 
 
-def generate_daily_report(database_path: Path | str, strategy_id: str | None = None) -> ReportResult:
+def generate_daily_report(
+    database_path: Path | str,
+    strategy_id: str | None = None,
+    run_id: str | None = None,
+) -> ReportResult:
+    selected_run_id = run_id or get_latest_run_id(database_path)
+    if selected_run_id is None:
+        return ReportResult(ok=False, message="No runs found.")
+
+    if not run_exists(database_path, selected_run_id):
+        return ReportResult(ok=False, message=f"Run not found: {selected_run_id}")
+
     with get_connection(database_path) as conn:
-        portfolio_rows = _fetch_portfolio_snapshots(conn, strategy_id)
+        run_row = conn.execute(
+            '''
+            SELECT id, strategy_id, starting_equity
+            FROM runs
+            WHERE id = ?
+            ''',
+            (selected_run_id,),
+        ).fetchone()
+        portfolio_rows = _fetch_portfolio_snapshots(conn, selected_run_id, strategy_id)
         if not portfolio_rows:
-            return ReportResult(ok=False, message="No portfolio snapshots found.")
+            return ReportResult(ok=False, message=f"No portfolio snapshots found for run: {selected_run_id}")
 
         benchmark_rows = conn.execute(
             '''
             SELECT benchmark_symbol, starting_equity, starting_benchmark_price,
                    current_benchmark_price, timestamp
             FROM benchmark_snapshots
+            WHERE run_id = ?
             ORDER BY timestamp ASC, id ASC
-            '''
+            ''',
+            (selected_run_id,),
         ).fetchall()
         if not benchmark_rows:
-            return ReportResult(ok=False, message="No benchmark snapshots found.")
+            return ReportResult(ok=False, message=f"No benchmark snapshots found for run: {selected_run_id}")
 
-        selected_strategy_id = strategy_id or portfolio_rows[-1]["strategy_id"] or "unknown"
+        selected_strategy_id = strategy_id or run_row["strategy_id"] or portfolio_rows[-1]["strategy_id"] or "unknown"
         equity_curve = [row["equity"] for row in portfolio_rows]
         starting_equity = equity_curve[0]
         current_equity = equity_curve[-1]
@@ -48,6 +69,7 @@ def generate_daily_report(database_path: Path | str, strategy_id: str | None = N
         spy_return = pct_return(starting_equity, benchmark_equity)
         report = {
             "report_date": date.today().isoformat(),
+            "run_id": selected_run_id,
             "strategy_id": selected_strategy_id,
             "benchmark_symbol": latest_benchmark["benchmark_symbol"],
             "starting_equity": starting_equity,
@@ -57,8 +79,8 @@ def generate_daily_report(database_path: Path | str, strategy_id: str | None = N
             "spy_return": spy_return,
             "excess_return": excess_return(strategy_return, spy_return),
             "max_drawdown": max_drawdown(equity_curve),
-            "trade_count": _count_orders(conn),
-            "rejected_trade_count": _count_rejected_trades(conn),
+            "trade_count": _count_orders(conn, selected_run_id),
+            "rejected_trade_count": _count_rejected_trades(conn, selected_run_id),
         }
 
     insert_daily_report(
@@ -66,6 +88,7 @@ def generate_daily_report(database_path: Path | str, strategy_id: str | None = N
         strategy_id=report["strategy_id"],
         report_date=report["report_date"],
         report=report,
+        run_id=report["run_id"],
     )
     return ReportResult(ok=True, report=report)
 
@@ -74,6 +97,7 @@ def format_report(report: dict) -> str:
     return "\n".join(
         [
             "Daily Report",
+            f"Run ID: {report['run_id']}",
             f"Strategy: {report['strategy_id']}",
             f"Benchmark: {report['benchmark_symbol']}",
             f"Starting equity: {_money(report['starting_equity'])}",
@@ -89,33 +113,38 @@ def format_report(report: dict) -> str:
     )
 
 
-def _fetch_portfolio_snapshots(conn, strategy_id: str | None):
+def _fetch_portfolio_snapshots(conn, run_id: str, strategy_id: str | None):
     if strategy_id is None:
         return conn.execute(
             '''
             SELECT strategy_id, equity, cash, timestamp
             FROM portfolio_snapshots
+            WHERE run_id = ?
             ORDER BY timestamp ASC, id ASC
-            '''
+            ''',
+            (run_id,),
         ).fetchall()
 
     return conn.execute(
         '''
         SELECT strategy_id, equity, cash, timestamp
         FROM portfolio_snapshots
-        WHERE strategy_id = ?
+        WHERE run_id = ? AND strategy_id = ?
         ORDER BY timestamp ASC, id ASC
         ''',
-        (strategy_id,),
+        (run_id, strategy_id),
     ).fetchall()
 
 
-def _count_orders(conn) -> int:
-    return conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+def _count_orders(conn, run_id: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM orders WHERE run_id = ?", (run_id,)).fetchone()[0]
 
 
-def _count_rejected_trades(conn) -> int:
-    return conn.execute("SELECT COUNT(*) FROM risk_decisions WHERE approved = 0").fetchone()[0]
+def _count_rejected_trades(conn, run_id: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM risk_decisions WHERE run_id = ? AND approved = 0",
+        (run_id,),
+    ).fetchone()[0]
 
 
 def _money(value: float) -> str:

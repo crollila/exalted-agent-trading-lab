@@ -60,6 +60,13 @@ python -m src.main init-db
 python -m src.main dry-run
 ```
 
+## Report examples
+
+```bash
+python -m src.main report
+python -m src.main report --run-id <id>
+```
+
 ## Status
 
 See `STATUS.md`.

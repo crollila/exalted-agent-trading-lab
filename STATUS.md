@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 3 benchmark reporting reviewed and completed.
+Phase 3.5 run-aware benchmark reporting completed.
 
 Included:
 
@@ -17,8 +17,11 @@ Included:
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
 - `paper-status` CLI command with safe failure when credentials or paper settings are missing.
 - SQLite-backed benchmark and daily report generator.
-- `report` CLI command for beginner-readable SPY comparison metrics.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, and performance.
+- Formal run records for dry-run sessions.
+- Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
+- `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
+- Explicit run-id reports via `python -m src.main report --run-id <id>`.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -37,7 +40,7 @@ Current allowed mode:
 
 ## Next step
 
-Review the Phase 3 results, then continue with broader paper-trading orchestration or deterministic strategy improvements when ready.
+Review the Phase 3.5 run-aware report behavior, then continue with broader paper-trading orchestration or deterministic strategy improvements when ready.
 
 ## Project manager rule
 
