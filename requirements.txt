@@ -1,0 +1,6 @@
+alpaca-py>=0.30.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+pandas>=2.2.0
+pytest>=8.0.0
+requests>=2.32.0
