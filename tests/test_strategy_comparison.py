@@ -252,6 +252,95 @@ def test_compare_strategies_save_writes_flat_artifacts_without_credentials(tmp_p
     assert payload["fixture_name"] == "flat"
 
 
+def test_compare_strategies_includes_hermes_fixtures_when_selected(tmp_path):
+    database_path = tmp_path / "comparison_with_hermes.sqlite3"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+    env.pop("HERMES_API_KEY", None)
+    env.pop("OPENAI_API_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--include-hermes-fixtures",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "hermes_conservative_fixture" in result.stdout
+    assert "hermes_aggressive_fixture" in result.stdout
+
+    with sqlite3.connect(database_path) as conn:
+        strategy_ids = [
+            row[0]
+            for row in conn.execute("SELECT strategy_id FROM runs ORDER BY started_at ASC, id ASC").fetchall()
+        ]
+
+    assert strategy_ids == [
+        "cash_only",
+        "spy_buy_hold",
+        "momentum_v1",
+        "hermes_conservative_fixture",
+        "hermes_aggressive_fixture",
+    ]
+
+
+def test_compare_strategies_saved_artifacts_include_hermes_fixtures_when_selected(tmp_path):
+    database_path = tmp_path / "comparison_save_with_hermes.sqlite3"
+    output_dir = tmp_path / "artifacts" / "hermes"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+    env.pop("HERMES_API_KEY", None)
+    env.pop("OPENAI_API_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--fixture",
+            "multi_day",
+            "--include-hermes-fixtures",
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(next(output_dir.glob("*.json")).read_text(encoding="utf-8"))
+    result_strategy_ids = {row["strategy_id"] for row in payload["results"]}
+
+    assert "hermes_conservative_fixture" in result_strategy_ids
+    assert "hermes_aggressive_fixture" in result_strategy_ids
+
+    with next(output_dir.glob("*.csv")).open(newline="", encoding="utf-8") as csv_file:
+        csv_strategy_ids = {row["strategy_id"] for row in csv.DictReader(csv_file)}
+
+    markdown_summary = next(output_dir.glob("*.md")).read_text(encoding="utf-8")
+
+    assert "hermes_conservative_fixture" in csv_strategy_ids
+    assert "hermes_aggressive_fixture" in csv_strategy_ids
+    assert "hermes_conservative_fixture" in markdown_summary
+    assert "hermes_aggressive_fixture" in markdown_summary
+
+
 def test_compare_strategies_unknown_strategy_fails_cleanly(tmp_path):
     database_path = tmp_path / "unknown_comparison.sqlite3"
     env = os.environ.copy()

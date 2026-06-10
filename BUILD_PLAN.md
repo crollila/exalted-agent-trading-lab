@@ -174,6 +174,31 @@ Not included:
 - External LLM/API calls.
 - Hermes runtime wiring.
 
+### Phase 6D - Hermes fixture strategies in local comparison
+
+Status: complete for parser-only local Hermes fixture strategies.
+
+Included:
+
+- `hermes_conservative_fixture` and `hermes_aggressive_fixture` strategies.
+- Hardcoded local Hermes-shaped JSON payloads.
+- Existing strict Hermes parser reused to convert fixture payloads into `TradeProposal` objects.
+- Stock-only, long-only, buy-only fixture proposal generation.
+- Conservative low target weights within current policy limits.
+- Aggressive higher target weights that remain within current position and turnover policy limits.
+- `compare-strategies --include-hermes-fixtures` adds Hermes fixture strategies to local comparison output.
+- `compare-strategies --include-hermes-fixtures --save` includes Hermes fixture rows in JSON, CSV, and Markdown artifacts.
+- Tests for valid fixture proposals, parser usage, invalid fixture rejection, comparison inclusion, saved artifact inclusion, and no credential requirement.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

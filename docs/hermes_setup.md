@@ -1,6 +1,6 @@
 # Hermes Setup
 
-Hermes Phase 5 is parser-only.
+Hermes runtime integration remains disabled.
 
 The repo can validate strict Hermes-shaped JSON and convert valid local payloads into `TradeProposal` objects. It does not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any broker.
 
@@ -26,7 +26,20 @@ Phase 5 stops at:
 Hermes-shaped JSON -> TradeProposal objects
 ```
 
-Hermes is not wired into dry-run execution yet.
+Phase 6D adds local Hermes fixture strategies for comparison only:
+
+```text
+Local Hermes-shaped fixture JSON -> Hermes parser -> TradeProposal objects -> Risk Engine -> Dry-run logs/reports
+```
+
+These fixtures are not Hermes runtime wiring. They use hardcoded JSON in the repo and require no model, endpoint, API key, Alpaca account, or network access.
+
+Run them in local comparison with:
+
+```bash
+python -m src.main compare-strategies --include-hermes-fixtures
+python -m src.main compare-strategies --fixture multi_day --include-hermes-fixtures --save
+```
 
 ## Parser requirements
 

@@ -11,11 +11,21 @@ from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
 from src.strategies.base import Strategy
 from src.strategies.cash_only import CashOnlyStrategy
+from src.strategies.hermes_fixtures import (
+    HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID,
+    HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID,
+    HermesAggressiveFixtureStrategy,
+    HermesConservativeFixtureStrategy,
+)
 from src.strategies.momentum_v1 import MomentumV1Strategy
 from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
 
 
-KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
+HERMES_FIXTURE_STRATEGIES = (
+    HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID,
+    HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID,
+)
+KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1", *HERMES_FIXTURE_STRATEGIES)
 DEFAULT_COMPARISON_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
 COMPARISON_FIXTURES = ("flat", "multi_day")
 
@@ -33,6 +43,10 @@ def build_strategy(strategy_name: str) -> Strategy:
         return SpyBuyHoldStrategy()
     if strategy_name == "momentum_v1":
         return MomentumV1Strategy()
+    if strategy_name == HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID:
+        return HermesConservativeFixtureStrategy()
+    if strategy_name == HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID:
+        return HermesAggressiveFixtureStrategy()
     raise ValueError(f"Unknown strategy: {strategy_name}")
 
 
@@ -89,12 +103,17 @@ def run_compare_strategies(
     fixture: str = "multi_day",
     save: bool = False,
     output_dir: Path | str = Path("data/experiments"),
+    include_hermes_fixtures: bool = False,
 ) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
+    selected_strategy_names = _comparison_strategy_names(
+        strategy_names=strategy_names,
+        include_hermes_fixtures=include_hermes_fixtures,
+    )
 
     reports: list[dict] = []
-    for strategy_name in strategy_names:
+    for strategy_name in selected_strategy_names:
         strategy = build_strategy(strategy_name)
         local_result = run_strategy_dry_run(strategy, settings, simulation_fixture=fixture)
         report_result = generate_daily_report(settings.database_path, run_id=local_result.run_id)
@@ -114,6 +133,20 @@ def run_compare_strategies(
         print(f"JSON: {artifacts.json_path}")
         print(f"CSV: {artifacts.csv_path}")
         print(f"Markdown: {artifacts.markdown_path}")
+
+
+def _comparison_strategy_names(
+    strategy_names: tuple[str, ...],
+    include_hermes_fixtures: bool,
+) -> tuple[str, ...]:
+    if not include_hermes_fixtures:
+        return strategy_names
+
+    selected = list(strategy_names)
+    for strategy_name in HERMES_FIXTURE_STRATEGIES:
+        if strategy_name not in selected:
+            selected.append(strategy_name)
+    return tuple(selected)
 
 
 def main() -> None:
@@ -162,6 +195,11 @@ def main() -> None:
         help="Save JSON, CSV, and Markdown comparison artifacts to the output directory.",
     )
     compare_parser.add_argument(
+        "--include-hermes-fixtures",
+        action="store_true",
+        help="Include parser-only local Hermes JSON fixture strategies in the comparison.",
+    )
+    compare_parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("data/experiments"),
@@ -184,6 +222,7 @@ def main() -> None:
             fixture=args.fixture,
             save=args.save,
             output_dir=args.output_dir,
+            include_hermes_fixtures=args.include_hermes_fixtures,
         )
     else:
         raise ValueError(f"Unknown command: {args.command}")
