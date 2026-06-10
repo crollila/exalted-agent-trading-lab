@@ -9,6 +9,7 @@ from src.db.database import initialize_database
 from src.execution.local_runner import run_strategy_dry_run
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
+from src.reporting.tournament_history import format_tournament_history, load_tournament_history
 from src.strategies.base import Strategy
 from src.strategies.cash_only import CashOnlyStrategy
 from src.strategies.hermes_fixtures import (
@@ -135,6 +136,11 @@ def run_compare_strategies(
         print(f"Markdown: {artifacts.markdown_path}")
 
 
+def run_tournament_history(output_dir: Path | str = Path("data/experiments")) -> None:
+    history = load_tournament_history(output_dir)
+    print(format_tournament_history(history, output_dir=output_dir))
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -205,6 +211,16 @@ def main() -> None:
         default=Path("data/experiments"),
         help="Directory for saved comparison artifacts. Defaults to data/experiments.",
     )
+    history_parser = subparsers.add_parser(
+        "tournament-history",
+        help="Review saved local compare-strategies JSON artifacts",
+    )
+    history_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
+    )
 
     args = parser.parse_args()
 
@@ -224,6 +240,8 @@ def main() -> None:
             output_dir=args.output_dir,
             include_hermes_fixtures=args.include_hermes_fixtures,
         )
+    elif args.command == "tournament-history":
+        run_tournament_history(output_dir=args.output_dir)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

@@ -71,6 +71,8 @@ python -m src.main compare-strategies --include-hermes-fixtures
 python -m src.main compare-strategies --fixture multi_day --save
 python -m src.main compare-strategies --fixture multi_day --include-hermes-fixtures --save
 python -m src.main compare-strategies --fixture flat --save --output-dir data/experiments
+python -m src.main tournament-history
+python -m src.main tournament-history --output-dir data/experiments
 ```
 
 This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware ranked comparison table. The default `multi_day` fixture uses deterministic local SPY, SPY buy-and-hold, and momentum symbol prices so strategy return, SPY return, excess return, and max drawdown are non-zero where appropriate. Use `--fixture flat` for the old single-snapshot placeholder behavior.
@@ -97,6 +99,8 @@ Use `--save` to write durable local research artifacts under `data/experiments` 
 - Markdown for human-readable experiment notes.
 
 Runtime experiment artifacts are ignored by git.
+
+Use `tournament-history` to review saved comparison JSON artifacts over time. It prints each valid experiment's timestamp, fixture, strategy count, winner, winning score, winning returns versus SPY, max drawdown, and artifact path. Malformed artifacts are skipped with a clear message instead of crashing.
 
 ## Report examples
 

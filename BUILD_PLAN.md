@@ -223,6 +223,30 @@ Not included:
 - Hermes runtime wiring.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6F - Tournament history / experiment ledger
+
+Status: complete for local saved-artifact history review.
+
+Included:
+
+- `tournament-history` CLI command reads saved `compare-strategies --save` JSON artifacts.
+- `tournament-history --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- Beginner-readable history output includes artifact timestamp, fixture name, strategy count, winning strategy ID, winning score, winning strategy return, winning SPY return, winning excess return, winning max drawdown, and artifact path.
+- Valid artifacts are sorted deterministically newest first.
+- Malformed or incomplete artifacts are skipped and reported without a traceback.
+- Empty or missing artifact directories print a clear no-artifacts message.
+- Tests use temporary fixture files and do not depend on real `data/experiments`.
+- Tests cover one artifact, multiple artifacts, rank-based winner detection, deterministic sorting, no-artifact behavior, malformed-artifact behavior, CLI winner/score output, and no external service or credential requirement.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold
