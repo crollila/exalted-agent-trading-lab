@@ -111,6 +111,26 @@ Rules:
 
 Goal: run multiple strategies side by side.
 
+### Phase 6A - Local multi-strategy comparison
+
+Status: complete for safe local dry-run comparison.
+
+Included:
+
+- Cash-only baseline strategy.
+- Local comparison command: `python -m src.main compare-strategies`.
+- Separate run records for `cash_only`, `spy_buy_hold`, and `momentum_v1`.
+- Run-aware report generation for each compared strategy.
+- Beginner-readable comparison table with Phase 3 metrics.
+- Tests for zero-proposal cash behavior, separate run creation, strategy inclusion, run isolation, comparison output, and no credential requirement.
+
+Not included:
+
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External LLM/API calls.
+
 Strategies:
 
 - SPY buy-and-hold

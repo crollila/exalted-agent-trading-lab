@@ -58,8 +58,17 @@ python -m src.main init-db
 
 ```bash
 python -m src.main dry-run
+python -m src.main dry-run --strategy cash_only
 python -m src.main dry-run --strategy momentum_v1
 ```
+
+## Compare local strategies
+
+```bash
+python -m src.main compare-strategies
+```
+
+This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware comparison table.
 
 ## Report examples
 
