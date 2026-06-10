@@ -16,6 +16,7 @@ from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
 
 KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
 DEFAULT_COMPARISON_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
+COMPARISON_FIXTURES = ("flat", "multi_day")
 
 
 def run_init_db() -> None:
@@ -82,14 +83,17 @@ def run_report(run_id: str | None = None) -> None:
     print(format_report(result.report))
 
 
-def run_compare_strategies(strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES) -> None:
+def run_compare_strategies(
+    strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES,
+    fixture: str = "multi_day",
+) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
 
     reports: list[dict] = []
     for strategy_name in strategy_names:
         strategy = build_strategy(strategy_name)
-        local_result = run_strategy_dry_run(strategy, settings)
+        local_result = run_strategy_dry_run(strategy, settings, simulation_fixture=fixture)
         report_result = generate_daily_report(settings.database_path, run_id=local_result.run_id)
         if not report_result.ok or report_result.report is None:
             print(f"Comparison unavailable for {strategy.strategy_id}: {report_result.message}")
@@ -133,6 +137,12 @@ def main() -> None:
         default=DEFAULT_COMPARISON_STRATEGIES,
         help="Local strategies to compare. Defaults to cash_only, spy_buy_hold, and momentum_v1.",
     )
+    compare_parser.add_argument(
+        "--fixture",
+        choices=COMPARISON_FIXTURES,
+        default="multi_day",
+        help="Deterministic local simulation fixture for comparison reports. Defaults to multi_day.",
+    )
 
     args = parser.parse_args()
 
@@ -145,7 +155,7 @@ def main() -> None:
     elif args.command == "report":
         run_report(run_id=args.run_id)
     elif args.command == "compare-strategies":
-        run_compare_strategies(strategy_names=tuple(args.strategies))
+        run_compare_strategies(strategy_names=tuple(args.strategies), fixture=args.fixture)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

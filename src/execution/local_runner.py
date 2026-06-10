@@ -18,6 +18,7 @@ from src.portfolio.portfolio_state import PortfolioState
 from src.reporting.benchmark_report import BenchmarkReport
 from src.risk.risk_rules import RiskRules
 from src.risk.trade_validator import TradeValidator
+from src.simulation.multi_day_fixture import ApprovedSimulationTrade, insert_multi_day_simulation_snapshots
 from src.strategies.base import Strategy
 
 
@@ -28,11 +29,18 @@ class LocalRunResult:
     proposal_count: int
 
 
+SIMULATION_FIXTURES = ("flat", "multi_day")
+
+
 def run_strategy_dry_run(
     strategy: Strategy,
     settings: Settings,
     database_path: Path | str | None = None,
+    simulation_fixture: str = "flat",
 ) -> LocalRunResult:
+    if simulation_fixture not in SIMULATION_FIXTURES:
+        raise ValueError(f"Unknown simulation fixture: {simulation_fixture}")
+
     active_database_path = database_path or settings.database_path
     portfolio = PortfolioState(
         equity=settings.starting_equity,
@@ -57,51 +65,71 @@ def run_strategy_dry_run(
         )
     )
     executor = OrderExecutor(database_path=active_database_path, dry_run=True, run_id=run_id)
+    approved_trades: list[ApprovedSimulationTrade] = []
 
     try:
-        insert_portfolio_snapshot(
-            active_database_path,
-            PortfolioSnapshot(
-                strategy_id=strategy.strategy_id,
-                equity=portfolio.equity,
-                cash=portfolio.cash,
-                timestamp=portfolio.timestamp,
-            ),
-            run_id=run_id,
-        )
+        if simulation_fixture == "flat":
+            insert_portfolio_snapshot(
+                active_database_path,
+                PortfolioSnapshot(
+                    strategy_id=strategy.strategy_id,
+                    equity=portfolio.equity,
+                    cash=portfolio.cash,
+                    timestamp=portfolio.timestamp,
+                ),
+                run_id=run_id,
+            )
 
         for proposal in proposals:
             decision = validator.validate(proposal=proposal, portfolio=portfolio)
             executor.handle_decision(proposal=proposal, decision=decision)
+            if decision.approved and decision.approved_quantity is not None:
+                approved_trades.append(
+                    ApprovedSimulationTrade(
+                        symbol=proposal.symbol,
+                        action=proposal.action,
+                        quantity=decision.approved_quantity,
+                        estimated_price=proposal.estimated_price,
+                    )
+                )
 
-        starting_spy_price = 500.0
-        current_spy_price = 500.0
-        report = BenchmarkReport(
-            starting_equity=settings.starting_equity,
-            current_strategy_equity=portfolio.equity,
-            starting_spy_price=starting_spy_price,
-            current_spy_price=current_spy_price,
-        ).to_dict()
-        report["run_id"] = run_id
-
-        insert_benchmark_snapshot(
-            active_database_path,
-            BenchmarkSnapshot(
+        if simulation_fixture == "multi_day":
+            insert_multi_day_simulation_snapshots(
+                database_path=active_database_path,
+                run_id=run_id,
+                strategy_id=strategy.strategy_id,
+                starting_equity=settings.starting_equity,
+                approved_trades=approved_trades,
+            )
+        else:
+            starting_spy_price = 500.0
+            current_spy_price = 500.0
+            report = BenchmarkReport(
                 starting_equity=settings.starting_equity,
                 current_strategy_equity=portfolio.equity,
-                starting_benchmark_price=starting_spy_price,
-                current_benchmark_price=current_spy_price,
-                timestamp=portfolio.timestamp,
-            ),
-            run_id=run_id,
-        )
-        insert_daily_report(
-            active_database_path,
-            strategy_id=strategy.strategy_id,
-            report_date=date.today().isoformat(),
-            report=report,
-            run_id=run_id,
-        )
+                starting_spy_price=starting_spy_price,
+                current_spy_price=current_spy_price,
+            ).to_dict()
+            report["run_id"] = run_id
+
+            insert_benchmark_snapshot(
+                active_database_path,
+                BenchmarkSnapshot(
+                    starting_equity=settings.starting_equity,
+                    current_strategy_equity=portfolio.equity,
+                    starting_benchmark_price=starting_spy_price,
+                    current_benchmark_price=current_spy_price,
+                    timestamp=portfolio.timestamp,
+                ),
+                run_id=run_id,
+            )
+            insert_daily_report(
+                active_database_path,
+                strategy_id=strategy.strategy_id,
+                report_date=date.today().isoformat(),
+                report=report,
+                run_id=run_id,
+            )
         complete_run(active_database_path, run_id)
     except Exception:
         complete_run(active_database_path, run_id, status="failed")

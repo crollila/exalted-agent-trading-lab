@@ -63,15 +63,32 @@ def test_compare_strategy_reports_are_isolated_by_run(tmp_path):
             SELECT r.strategy_id, r.id,
                    (SELECT COUNT(*) FROM trade_proposals p WHERE p.run_id = r.id) AS proposals,
                    (SELECT COUNT(*) FROM orders o WHERE o.run_id = r.id) AS orders,
-                   (SELECT COUNT(*) FROM risk_decisions d WHERE d.run_id = r.id AND d.approved = 0) AS rejected
+                   (SELECT COUNT(*) FROM risk_decisions d WHERE d.run_id = r.id AND d.approved = 0) AS rejected,
+                   (SELECT COUNT(*) FROM portfolio_snapshots ps WHERE ps.run_id = r.id) AS portfolio_snapshots,
+                   (SELECT COUNT(*) FROM benchmark_snapshots bs WHERE bs.run_id = r.id) AS benchmark_snapshots
             FROM runs r
             ORDER BY r.started_at ASC, r.id ASC
             '''
         ).fetchall()
 
     by_strategy = {
-        strategy_id: {"run_id": run_id, "proposals": proposals, "orders": orders, "rejected": rejected}
-        for strategy_id, run_id, proposals, orders, rejected in rows
+        strategy_id: {
+            "run_id": run_id,
+            "proposals": proposals,
+            "orders": orders,
+            "rejected": rejected,
+            "portfolio_snapshots": portfolio_snapshots,
+            "benchmark_snapshots": benchmark_snapshots,
+        }
+        for (
+            strategy_id,
+            run_id,
+            proposals,
+            orders,
+            rejected,
+            portfolio_snapshots,
+            benchmark_snapshots,
+        ) in rows
     }
     assert by_strategy["cash_only"]["proposals"] == 0
     assert by_strategy["cash_only"]["orders"] == 0
@@ -80,6 +97,8 @@ def test_compare_strategy_reports_are_isolated_by_run(tmp_path):
     assert by_strategy["momentum_v1"]["proposals"] == 2
     assert by_strategy["momentum_v1"]["orders"] == 2
     assert all(data["rejected"] == 0 for data in by_strategy.values())
+    assert all(data["portfolio_snapshots"] == 5 for data in by_strategy.values())
+    assert all(data["benchmark_snapshots"] == 5 for data in by_strategy.values())
 
 
 def test_comparison_output_includes_required_metrics():

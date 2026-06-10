@@ -131,6 +131,28 @@ Not included:
 - Alpaca calls.
 - External LLM/API calls.
 
+### Phase 6B - Deterministic multi-day simulation fixtures
+
+Status: complete for local deterministic comparison fixtures.
+
+Included:
+
+- Deterministic local multi-day price fixture for SPY and strategy symbols.
+- Approved-trade-only simulation snapshots for comparison runs.
+- Multi-day portfolio snapshots and benchmark snapshots per run.
+- Non-zero strategy return, SPY return, excess return, and max drawdown where fixture movement creates them.
+- Cash-only remains a zero-return strategy baseline with no modeled cash yield.
+- `compare-strategies` uses the `multi_day` fixture by default and supports `--fixture flat` or `--fixture multi_day`.
+- Tests for fixture SPY movement, simulated strategy movement, excess return, drawdown, cash-only baseline, CLI output, run isolation, and no credential requirement.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- Hermes runtime wiring.
+- Cash yield modeling.
+
 Strategies:
 
 - SPY buy-and-hold

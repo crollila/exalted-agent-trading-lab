@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6A local multi-strategy comparison framework completed.
+Phase 6B deterministic multi-day simulation fixtures completed.
 
 Included:
 
@@ -19,6 +19,10 @@ Included:
 - Dry-run order executor that only uses risk-approved quantities.
 - `dry-run --strategy` CLI selection for known local deterministic strategies.
 - `compare-strategies` CLI command that runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records.
+- Deterministic local `multi_day` comparison fixture for SPY, SPY buy-and-hold, and momentum strategy symbols.
+- `compare-strategies --fixture multi_day` explicit fixture selection, with `multi_day` as the default and `flat` available for the old placeholder behavior.
+- Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
+- Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with strategy ID, run ID, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
 - Alpaca paper client wrapper for account status, positions, market clock, and approved paper-order submission.
 - `paper-status` CLI command with safe failure when credentials or paper settings are missing.
@@ -27,7 +31,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -45,11 +49,11 @@ Current allowed mode:
 - No LLM direct execution.
 - Hermes is parser-only and is not wired into dry-run, paper trading, Alpaca, or any order path.
 - Hermes parser tests require no network, credentials, Ollama, LM Studio, hosted LLM, or real market data.
-- Local strategy comparison is dry-run only and does not call Alpaca, Hermes, external LLMs, or network services.
+- Local strategy comparison is dry-run only and does not call Alpaca, Hermes, external LLMs, market data APIs, or network services.
 
 ## Next step
 
-Review Phase 6A results, then continue with explicit Hermes runtime prompting or broader non-live tournament variants when ready.
+Review Phase 6B results, then continue with explicit Hermes runtime prompting or broader non-live tournament variants when ready.
 
 ## Project manager rule
 
