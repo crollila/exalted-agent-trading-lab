@@ -15,6 +15,26 @@ WINNER_FIELDS = (
     "excess_return",
     "max_drawdown",
 )
+RESULT_FIELDS = (
+    "rank",
+    "strategy_id",
+    "score",
+    "strategy_return",
+    "spy_return",
+    "excess_return",
+    "max_drawdown",
+)
+
+
+@dataclass(frozen=True)
+class TournamentStrategyResult:
+    rank: int
+    strategy_id: str
+    score: float
+    strategy_return: float
+    spy_return: float
+    excess_return: float
+    max_drawdown: float
 
 
 @dataclass(frozen=True)
@@ -30,6 +50,7 @@ class TournamentHistoryEntry:
     winning_excess_return: float
     winning_max_drawdown: float
     artifact_path: Path
+    strategy_results: list[TournamentStrategyResult]
 
 
 @dataclass(frozen=True)
@@ -133,6 +154,7 @@ def _entry_from_payload(payload: Any, artifact_path: Path) -> TournamentHistoryE
     if not isinstance(results, list) or not results:
         raise ValueError("artifact results must be a non-empty list")
 
+    strategy_results = _strategy_results_from_rows(results)
     winner = _winner_from_results(results)
     return TournamentHistoryEntry(
         experiment_timestamp=experiment_timestamp,
@@ -146,7 +168,35 @@ def _entry_from_payload(payload: Any, artifact_path: Path) -> TournamentHistoryE
         winning_excess_return=_required_number(winner, "excess_return"),
         winning_max_drawdown=_required_number(winner, "max_drawdown"),
         artifact_path=artifact_path,
+        strategy_results=strategy_results,
     )
+
+
+def _strategy_results_from_rows(results: list[Any]) -> list[TournamentStrategyResult]:
+    strategy_results: list[TournamentStrategyResult] = []
+    for index, row in enumerate(results, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"result row {index} must be an object")
+        missing_fields = [field for field in RESULT_FIELDS if field not in row]
+        if missing_fields:
+            raise ValueError(f"result row {index} missing fields: {', '.join(missing_fields)}")
+
+        rank = row.get("rank")
+        if not isinstance(rank, int):
+            raise ValueError(f"result row {index} has invalid rank")
+
+        strategy_results.append(
+            TournamentStrategyResult(
+                rank=rank,
+                strategy_id=_required_str(row, "strategy_id"),
+                score=_required_number(row, "score"),
+                strategy_return=_required_number(row, "strategy_return"),
+                spy_return=_required_number(row, "spy_return"),
+                excess_return=_required_number(row, "excess_return"),
+                max_drawdown=_required_number(row, "max_drawdown"),
+            )
+        )
+    return strategy_results
 
 
 def _winner_from_results(results: list[Any]) -> dict:

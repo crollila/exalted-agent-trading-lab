@@ -247,6 +247,30 @@ Not included:
 - Hermes runtime wiring.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6G - Tournament champion report
+
+Status: complete for local champion summary reporting.
+
+Included:
+
+- `tournament-champion` CLI command reads saved ranked `compare-strategies --save` JSON artifacts.
+- `tournament-champion --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- Champion is the strategy with the most rank-1 wins across valid saved tournaments.
+- Deterministic champion tie-breakers use more wins, higher average score, higher best score, higher average excess return, lower worst drawdown, then strategy ID alphabetical.
+- Beginner-readable champion output includes champion strategy ID, number of valid tournaments reviewed, champion wins, win rate, best score, average score, average excess return, worst max drawdown, most recent win timestamp, fixtures where the champion appeared, and skipped/malformed artifact count.
+- Empty, missing, malformed, and mixed valid/malformed artifact directories are handled without tracebacks.
+- Tests use temporary fixture files and do not depend on real `data/experiments`.
+- Tests cover one artifact, multiple artifacts, most-wins champion selection, deterministic tie-breakers, average score, best score, average excess return, worst drawdown, no-artifact behavior, all-malformed behavior, mixed valid/malformed behavior, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

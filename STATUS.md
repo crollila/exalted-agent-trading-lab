@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6F tournament history / experiment ledger completed.
+Phase 6G tournament champion report completed.
 
 Included:
 
@@ -35,6 +35,10 @@ Included:
 - `tournament-history --output-dir` support, defaulting to ignored runtime output under `data/experiments`.
 - Beginner-readable tournament history output with artifact timestamp, fixture name, strategy count, winning strategy ID, winning score, winning strategy return, winning SPY return, winning excess return, winning max drawdown, and artifact path.
 - Tournament history sorts valid artifacts newest first and reports malformed artifacts without crashing.
+- `tournament-champion` CLI command for summarizing the current champion strategy across saved ranked tournament artifacts.
+- `tournament-champion --output-dir` support, defaulting to ignored runtime output under `data/experiments`.
+- Beginner-readable champion output with champion strategy ID, valid tournament count, wins, win rate, best score, average score, average excess return, worst max drawdown, most recent win timestamp, fixtures where the champion appeared, and skipped/malformed artifact count.
+- Champion selection uses most rank-1 wins, then deterministic tie-breakers for average score, best score, average excess return, worst drawdown, and strategy ID.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -45,7 +49,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -68,7 +72,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6F tournament history output, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6G tournament champion output, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

@@ -9,6 +9,7 @@ from src.db.database import initialize_database
 from src.execution.local_runner import run_strategy_dry_run
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
+from src.reporting.tournament_champion import format_tournament_champion, load_tournament_champion
 from src.reporting.tournament_history import format_tournament_history, load_tournament_history
 from src.strategies.base import Strategy
 from src.strategies.cash_only import CashOnlyStrategy
@@ -141,6 +142,11 @@ def run_tournament_history(output_dir: Path | str = Path("data/experiments")) ->
     print(format_tournament_history(history, output_dir=output_dir))
 
 
+def run_tournament_champion(output_dir: Path | str = Path("data/experiments")) -> None:
+    champion = load_tournament_champion(output_dir)
+    print(format_tournament_champion(champion, output_dir=output_dir))
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -221,6 +227,16 @@ def main() -> None:
         default=Path("data/experiments"),
         help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
     )
+    champion_parser = subparsers.add_parser(
+        "tournament-champion",
+        help="Summarize the current champion strategy across saved tournaments",
+    )
+    champion_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
+    )
 
     args = parser.parse_args()
 
@@ -242,6 +258,8 @@ def main() -> None:
         )
     elif args.command == "tournament-history":
         run_tournament_history(output_dir=args.output_dir)
+    elif args.command == "tournament-champion":
+        run_tournament_champion(output_dir=args.output_dir)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 
