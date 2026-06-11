@@ -49,7 +49,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - SQLite-backed benchmark reports against SPY.
 - Run-aware reporting via explicit run records.
 - Deterministic strategy comparison for local strategies.
-- Multi-day local fixtures for non-zero return, SPY return, excess return, and drawdown examples.
+- Multi-scenario local fixtures for non-zero return, SPY return, excess return, and drawdown examples.
 - Hermes parser-only fixture strategies using hardcoded local JSON.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
@@ -151,6 +151,17 @@ python -m src.main report --run-id <id>
 ## Strategy comparison and tournament scoring
 
 The default comparison runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records. The default `multi_day` fixture uses deterministic local prices for SPY and strategy symbols so reports can show strategy return, SPY return, excess return, and max drawdown where appropriate. Use `--fixture flat` for the older single-snapshot placeholder behavior.
+
+Available fixtures:
+
+- `flat`
+- `multi_day`
+- `bull_trend`
+- `bear_trend`
+- `sideways_chop`
+- `volatile_reversal`
+- `spy_outperformance`
+- `momentum_crash`
 
 Tournament ranking uses this deterministic score:
 

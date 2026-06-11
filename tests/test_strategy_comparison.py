@@ -320,6 +320,132 @@ def test_compare_strategies_save_writes_flat_artifacts_without_credentials(tmp_p
     assert payload["fixture_name"] == "flat"
 
 
+def test_compare_strategies_save_writes_selected_new_fixture_name(tmp_path):
+    database_path = tmp_path / "comparison_save_momentum_crash.sqlite3"
+    output_dir = tmp_path / "artifacts" / "momentum_crash"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--fixture",
+            "momentum_crash",
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(next(output_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert payload["fixture_name"] == "momentum_crash"
+
+
+def test_new_fixture_artifacts_work_with_reporting_commands(tmp_path):
+    database_path = tmp_path / "comparison_save_bull_trend.sqlite3"
+    output_dir = tmp_path / "artifacts"
+    report_path = tmp_path / "reports" / "leaderboard.md"
+    notes_dir = tmp_path / "notes"
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+    env.pop("HERMES_API_KEY", None)
+    env.pop("OPENAI_API_KEY", None)
+
+    save_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--fixture",
+            "bull_trend",
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    history_result = subprocess.run(
+        [sys.executable, "-m", "src.main", "tournament-history", "--output-dir", str(output_dir)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    champion_result = subprocess.run(
+        [sys.executable, "-m", "src.main", "tournament-champion", "--output-dir", str(output_dir)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    leaderboard_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "export-leaderboard",
+            "--output-dir",
+            str(output_dir),
+            "--report-path",
+            str(report_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    note_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "create-analysis-note",
+            "--output-dir",
+            str(output_dir),
+            "--notes-dir",
+            str(notes_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert save_result.returncode == 0
+    assert history_result.returncode == 0
+    assert champion_result.returncode == 0
+    assert leaderboard_result.returncode == 0
+    assert note_result.returncode == 0
+    assert "bull_trend" in history_result.stdout
+    assert "Champion strategy ID:" in champion_result.stdout
+    assert report_path.exists()
+    assert "Saved strategy analysis note:" in note_result.stdout
+    assert list(notes_dir.glob("analysis_note_bull_trend_*.md"))
+    assert "Traceback" not in (
+        save_result.stderr
+        + history_result.stderr
+        + champion_result.stderr
+        + leaderboard_result.stderr
+        + note_result.stderr
+    )
+
+
 def test_compare_strategies_includes_hermes_fixtures_when_selected(tmp_path):
     database_path = tmp_path / "comparison_with_hermes.sqlite3"
     env = os.environ.copy()

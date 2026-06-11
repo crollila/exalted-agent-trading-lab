@@ -389,6 +389,38 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6L - Fixture scenario expansion
+
+Status: complete for additional deterministic local market scenarios.
+
+Included:
+
+- New `compare-strategies --fixture` choices: `bull_trend`, `bear_trend`, `sideways_chop`, `volatile_reversal`, `spy_outperformance`, and `momentum_crash`.
+- Existing `flat` and `multi_day` behavior remains backward compatible.
+- Default comparison fixture remains `multi_day`.
+- All new fixtures are local, deterministic, small, and beginner-readable.
+- Each new fixture includes deterministic SPY benchmark movement and strategy-symbol movement.
+- `momentum_crash` is intentionally challenging for the momentum strategy.
+- `spy_outperformance` models a regime where SPY beats the local momentum strategy.
+- Saved JSON, CSV, and Markdown comparison artifacts include the selected new fixture name.
+- New fixture artifacts continue to work with `tournament-history`, `tournament-champion`, `export-leaderboard`, and `create-analysis-note`.
+- Tests cover fixture acceptance, determinism, SPY movement, challenging momentum regime, SPY outperformance, saved fixture names, downstream reporting compatibility, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

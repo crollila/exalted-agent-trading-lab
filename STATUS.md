@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6K research decision ledger completed.
+Phase 6L fixture scenario expansion completed.
 
 Included:
 
@@ -54,6 +54,9 @@ Included:
 - Research decision validation for `promote`, `modify`, `retest`, `retire`, and `no_decision`.
 - `research-decisions` CLI command for reading the local Markdown decision ledger or printing a clear no-ledger message.
 - Research decision entries include timestamp, strategy ID, decision, reason, optional source note path, optional next action, and a safety reminder that the entry is not live trading approval and changes no broker/order behavior.
+- Expanded deterministic local comparison fixtures: `bull_trend`, `bear_trend`, `sideways_chop`, `volatile_reversal`, `spy_outperformance`, and `momentum_crash`.
+- Existing `flat` and `multi_day` fixture behavior remains backward compatible, with `multi_day` still the default for strategy comparison.
+- New fixture artifacts flow through tournament history, tournament champion, leaderboard export, and analysis-note generation.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -64,7 +67,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, analysis notes, research decisions, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -87,7 +90,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6K research decision ledger, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6L fixture scenario expansion, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

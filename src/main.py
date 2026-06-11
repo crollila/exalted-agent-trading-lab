@@ -6,7 +6,7 @@ from pathlib import Path
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
-from src.execution.local_runner import run_strategy_dry_run
+from src.execution.local_runner import SIMULATION_FIXTURES, run_strategy_dry_run
 from src.reporting.analysis_notes import create_strategy_analysis_note
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
@@ -37,7 +37,7 @@ HERMES_FIXTURE_STRATEGIES = (
 )
 KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1", *HERMES_FIXTURE_STRATEGIES)
 DEFAULT_COMPARISON_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
-COMPARISON_FIXTURES = ("flat", "multi_day")
+COMPARISON_FIXTURES = SIMULATION_FIXTURES
 
 
 def run_init_db() -> None:

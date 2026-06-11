@@ -18,7 +18,11 @@ from src.portfolio.portfolio_state import PortfolioState
 from src.reporting.benchmark_report import BenchmarkReport
 from src.risk.risk_rules import RiskRules
 from src.risk.trade_validator import TradeValidator
-from src.simulation.multi_day_fixture import ApprovedSimulationTrade, insert_multi_day_simulation_snapshots
+from src.simulation.multi_day_fixture import (
+    NAMED_SIMULATION_FIXTURES,
+    ApprovedSimulationTrade,
+    insert_multi_day_simulation_snapshots,
+)
 from src.strategies.base import Strategy
 
 
@@ -29,7 +33,7 @@ class LocalRunResult:
     proposal_count: int
 
 
-SIMULATION_FIXTURES = ("flat", "multi_day")
+SIMULATION_FIXTURES = ("flat", *NAMED_SIMULATION_FIXTURES)
 
 
 def run_strategy_dry_run(
@@ -93,13 +97,14 @@ def run_strategy_dry_run(
                     )
                 )
 
-        if simulation_fixture == "multi_day":
+        if simulation_fixture != "flat":
             insert_multi_day_simulation_snapshots(
                 database_path=active_database_path,
                 run_id=run_id,
                 strategy_id=strategy.strategy_id,
                 starting_equity=settings.starting_equity,
                 approved_trades=approved_trades,
+                fixture_name=simulation_fixture,
             )
         else:
             starting_spy_price = 500.0
