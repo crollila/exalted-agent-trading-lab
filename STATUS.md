@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6G tournament champion report completed.
+Phase 6H strategy leaderboard README/report export completed.
 
 Included:
 
@@ -39,6 +39,10 @@ Included:
 - `tournament-champion --output-dir` support, defaulting to ignored runtime output under `data/experiments`.
 - Beginner-readable champion output with champion strategy ID, valid tournament count, wins, win rate, best score, average score, average excess return, worst max drawdown, most recent win timestamp, fixtures where the champion appeared, and skipped/malformed artifact count.
 - Champion selection uses most rank-1 wins, then deterministic tie-breakers for average score, best score, average excess return, worst drawdown, and strategy ID.
+- `export-leaderboard` CLI command for generating a clean Markdown strategy leaderboard report from saved ranked tournament artifacts.
+- `export-leaderboard --output-dir` and `--report-path` support, defaulting to ignored runtime paths under `data/experiments` and `data/reports/strategy_leaderboard.md`.
+- Leaderboard report includes generated timestamp, current champion summary, score formula, safety disclaimer, recent tournament table, strategy aggregate table, fixture caveats, artifact source directory, and skipped/malformed artifact count when applicable.
+- Leaderboard export creates missing report directories and does not write a report when no valid artifacts exist.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -49,7 +53,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-day simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -72,7 +76,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6G tournament champion output, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6H strategy leaderboard export, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

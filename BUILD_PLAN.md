@@ -271,6 +271,31 @@ Not included:
 - Hermes runtime wiring.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6H - Strategy leaderboard README/report export
+
+Status: complete for local Markdown leaderboard export.
+
+Included:
+
+- `export-leaderboard` CLI command reads saved ranked `compare-strategies --save` JSON artifacts.
+- `export-leaderboard --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- `export-leaderboard --report-path` selects the Markdown report path, defaulting to `data/reports/strategy_leaderboard.md`.
+- Missing report directories are created automatically.
+- No report is written when no valid artifacts exist.
+- The Markdown report includes title, generated timestamp, current champion summary, score formula, safety disclaimer, recent tournament table, strategy aggregate table, fixture caveats, and artifact source directory.
+- Malformed or incomplete artifacts are skipped and reported in the export when valid artifacts also exist.
+- Tests use temporary fixture files and do not depend on real `data/experiments` or `data/reports`.
+- Tests cover one artifact, multiple artifacts, champion summary, score formula, safety disclaimer, strategy aggregate table, recent tournament table, output directory creation, no-artifact behavior, malformed-artifact skip behavior, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Hermes runtime wiring.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

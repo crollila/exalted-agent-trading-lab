@@ -7,6 +7,7 @@ from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
 from src.execution.local_runner import run_strategy_dry_run
+from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
 from src.reporting.tournament_champion import format_tournament_champion, load_tournament_champion
@@ -147,6 +148,14 @@ def run_tournament_champion(output_dir: Path | str = Path("data/experiments")) -
     print(format_tournament_champion(champion, output_dir=output_dir))
 
 
+def run_export_leaderboard(
+    output_dir: Path | str = Path("data/experiments"),
+    report_path: Path | str = Path("data/reports/strategy_leaderboard.md"),
+) -> None:
+    result = export_strategy_leaderboard(output_dir=output_dir, report_path=report_path)
+    print(result.message)
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -237,6 +246,22 @@ def main() -> None:
         default=Path("data/experiments"),
         help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
     )
+    leaderboard_parser = subparsers.add_parser(
+        "export-leaderboard",
+        help="Export a Markdown strategy leaderboard from saved ranked tournaments",
+    )
+    leaderboard_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
+    )
+    leaderboard_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=Path("data/reports/strategy_leaderboard.md"),
+        help="Markdown report path. Defaults to data/reports/strategy_leaderboard.md.",
+    )
 
     args = parser.parse_args()
 
@@ -260,6 +285,8 @@ def main() -> None:
         run_tournament_history(output_dir=args.output_dir)
     elif args.command == "tournament-champion":
         run_tournament_champion(output_dir=args.output_dir)
+    elif args.command == "export-leaderboard":
+        run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

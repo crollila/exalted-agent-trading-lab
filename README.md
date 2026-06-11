@@ -75,6 +75,8 @@ python -m src.main tournament-history
 python -m src.main tournament-history --output-dir data/experiments
 python -m src.main tournament-champion
 python -m src.main tournament-champion --output-dir data/experiments
+python -m src.main export-leaderboard
+python -m src.main export-leaderboard --output-dir data/experiments --report-path data/reports/strategy_leaderboard.md
 ```
 
 This runs `cash_only`, `spy_buy_hold`, and `momentum_v1` in separate dry-run records and prints a run-aware ranked comparison table. The default `multi_day` fixture uses deterministic local SPY, SPY buy-and-hold, and momentum symbol prices so strategy return, SPY return, excess return, and max drawdown are non-zero where appropriate. Use `--fixture flat` for the old single-snapshot placeholder behavior.
@@ -105,6 +107,8 @@ Runtime experiment artifacts are ignored by git.
 Use `tournament-history` to review saved comparison JSON artifacts over time. It prints each valid experiment's timestamp, fixture, strategy count, winner, winning score, winning returns versus SPY, max drawdown, and artifact path. Malformed artifacts are skipped with a clear message instead of crashing.
 
 Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. The champion is the strategy with the most rank-1 wins, with deterministic tie-breakers for average score, best score, average excess return, worst drawdown, and strategy ID.
+
+Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report from saved ranked tournament artifacts. The default report path is `data/reports/strategy_leaderboard.md`, which is ignored by git along with other runtime report output.
 
 ## Report examples
 
