@@ -23,6 +23,8 @@ RESULT_FIELDS = (
     "spy_return",
     "excess_return",
     "max_drawdown",
+    "trade_count",
+    "rejected_trade_count",
 )
 
 
@@ -35,6 +37,8 @@ class TournamentStrategyResult:
     spy_return: float
     excess_return: float
     max_drawdown: float
+    trade_count: int
+    rejected_trade_count: int
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,8 @@ def _strategy_results_from_rows(results: list[Any]) -> list[TournamentStrategyRe
                 spy_return=_required_number(row, "spy_return"),
                 excess_return=_required_number(row, "excess_return"),
                 max_drawdown=_required_number(row, "max_drawdown"),
+                trade_count=_required_int(row, "trade_count"),
+                rejected_trade_count=_required_int(row, "rejected_trade_count"),
             )
         )
     return strategy_results
@@ -223,6 +229,13 @@ def _required_number(payload: dict, field: str) -> float:
     if not isinstance(value, (int, float)):
         raise ValueError(f"missing or invalid numeric field: {field}")
     return float(value)
+
+
+def _required_int(payload: dict, field: str) -> int:
+    value = payload.get(field)
+    if not isinstance(value, int):
+        raise ValueError(f"missing or invalid integer field: {field}")
+    return value
 
 
 def _parse_timestamp(value: str) -> datetime:

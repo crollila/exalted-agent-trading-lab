@@ -7,6 +7,7 @@ from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
 from src.execution.local_runner import run_strategy_dry_run
+from src.reporting.analysis_notes import create_strategy_analysis_note
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
@@ -156,6 +157,15 @@ def run_export_leaderboard(
     print(result.message)
 
 
+def run_create_analysis_note(
+    output_dir: Path | str = Path("data/experiments"),
+    notes_dir: Path | str = Path("data/notes"),
+    force: bool = False,
+) -> None:
+    result = create_strategy_analysis_note(output_dir=output_dir, notes_dir=notes_dir, force=force)
+    print(result.message)
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -262,6 +272,27 @@ def main() -> None:
         default=Path("data/reports/strategy_leaderboard.md"),
         help="Markdown report path. Defaults to data/reports/strategy_leaderboard.md.",
     )
+    analysis_note_parser = subparsers.add_parser(
+        "create-analysis-note",
+        help="Create a Markdown human review note from the latest saved ranked tournament",
+    )
+    analysis_note_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
+    )
+    analysis_note_parser.add_argument(
+        "--notes-dir",
+        type=Path,
+        default=Path("data/notes"),
+        help="Directory for analysis note Markdown files. Defaults to data/notes.",
+    )
+    analysis_note_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the analysis note if the deterministic filename already exists.",
+    )
 
     args = parser.parse_args()
 
@@ -287,6 +318,8 @@ def main() -> None:
         run_tournament_champion(output_dir=args.output_dir)
     elif args.command == "export-leaderboard":
         run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
+    elif args.command == "create-analysis-note":
+        run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

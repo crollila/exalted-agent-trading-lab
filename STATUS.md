@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6I README project showcase polish completed.
+Phase 6J strategy notes / post-run analysis templates completed.
 
 Included:
 
@@ -44,6 +44,11 @@ Included:
 - Leaderboard report includes generated timestamp, current champion summary, score formula, safety disclaimer, recent tournament table, strategy aggregate table, fixture caveats, artifact source directory, and skipped/malformed artifact count when applicable.
 - Leaderboard export creates missing report directories and does not write a report when no valid artifacts exist.
 - Top-level README now includes a concise project summary, portfolio/recruiting review notes, architecture flow, safety disclaimer, current capabilities, beginner command workflow, and a portfolio note.
+- `create-analysis-note` CLI command for generating local Markdown human review templates from the latest valid saved ranked tournament artifact.
+- `create-analysis-note --output-dir` and `--notes-dir` support, defaulting to ignored runtime paths under `data/experiments` and `data/notes`.
+- `create-analysis-note --force` support for explicit safe overwrites when the deterministic note filename already exists.
+- Analysis notes include generated timestamp, source artifact path, tournament timestamp, fixture name, winner strategy ID, winner score, ranking table, score formula, safety disclaimer, human review prompts, and decision checkboxes.
+- Malformed tournament artifacts are skipped safely during analysis-note generation, and empty or missing artifact directories produce beginner-readable messages without tracebacks.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -77,7 +82,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6I README project showcase polish, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6J strategy notes / post-run analysis templates, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

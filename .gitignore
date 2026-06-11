@@ -6,6 +6,7 @@ data/*.sqlite3
 data/*.db
 data/experiments/
 data/reports/
+data/notes/
 *.pyc
 .DS_Store
 .idea/

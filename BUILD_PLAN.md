@@ -324,6 +324,39 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6J - Strategy notes / post-run analysis templates
+
+Status: complete for local Markdown analysis-note generation.
+
+Included:
+
+- `create-analysis-note` CLI command for creating a human review note from saved ranked tournament artifacts.
+- `create-analysis-note --output-dir` selects the saved artifact directory, defaulting to `data/experiments`.
+- `create-analysis-note --notes-dir` selects the Markdown note directory, defaulting to `data/notes`.
+- `create-analysis-note --force` explicitly overwrites the deterministic note file when needed.
+- Most recent valid tournament artifact is selected by default.
+- Notes directory is created when missing.
+- Existing notes are not overwritten unless `--force` is passed.
+- Missing, empty, malformed, and mixed valid/malformed artifact directories are handled without tracebacks.
+- Markdown note includes generated timestamp, source artifact path, tournament timestamp, fixture name, winner strategy ID, winner score, strategy ranking table, score formula, safety disclaimer, human review prompts, and decision checkboxes.
+- Runtime notes under `data/notes` are ignored by git.
+- Tests cover note generation, most recent artifact selection, malformed-artifact skipping, no-valid-artifact behavior, notes directory creation, no-overwrite behavior, force overwrite behavior, source artifact path, winner/ranking table, prompts, decision checkboxes, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold
