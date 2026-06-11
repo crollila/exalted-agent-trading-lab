@@ -57,6 +57,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Leaderboard Markdown export to an ignored runtime report path.
 - Strategy tournament analysis note templates for repeatable human post-run review.
 - Research decision ledger for recording promote/modify/retest/retire/no-decision outcomes.
+- Fixture sweep tournament for cross-regime robustness summaries.
 
 ## Beginner command workflow
 
@@ -106,6 +107,15 @@ Save comparison artifacts:
 python -m src.main compare-strategies --fixture multi_day --save
 python -m src.main compare-strategies --fixture multi_day --include-hermes-fixtures --save
 python -m src.main compare-strategies --fixture flat --save --output-dir data/experiments
+```
+
+Run a fixture sweep tournament:
+
+```bash
+python -m src.main fixture-sweep
+python -m src.main fixture-sweep --include-hermes-fixtures
+python -m src.main fixture-sweep --save
+python -m src.main fixture-sweep --save --output-dir data/experiments
 ```
 
 Review tournament history and champion:
@@ -185,6 +195,8 @@ Use `--save` to write durable local research artifacts under `data/experiments` 
 - Markdown for human-readable experiment notes.
 
 Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed. Use `record-research-decision` and `research-decisions` to maintain an ignored local Markdown decision ledger at `data/notes/research_decisions.md`.
+
+Use `fixture-sweep` to run the same local strategy set across all deterministic non-flat fixtures and summarize fixture winners, aggregate wins, average score, average excess return, worst drawdown, and an overall robust champion. Sweep artifacts are ignored runtime outputs under `data/experiments` when `--save` is passed.
 
 ## Portfolio note
 

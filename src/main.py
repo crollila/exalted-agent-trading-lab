@@ -8,6 +8,11 @@ from src.config.settings import Settings
 from src.db.database import initialize_database
 from src.execution.local_runner import SIMULATION_FIXTURES, run_strategy_dry_run
 from src.reporting.analysis_notes import create_strategy_analysis_note
+from src.reporting.fixture_sweep import (
+    format_fixture_sweep,
+    save_fixture_sweep_artifacts,
+    summarize_fixture_sweep,
+)
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.research_decisions import (
@@ -16,7 +21,11 @@ from src.reporting.research_decisions import (
     read_research_decision_ledger,
     record_research_decision,
 )
-from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
+from src.reporting.strategy_comparison import (
+    format_strategy_comparison,
+    rank_strategy_reports,
+    save_strategy_comparison_artifacts,
+)
 from src.reporting.tournament_champion import format_tournament_champion, load_tournament_champion
 from src.reporting.tournament_history import format_tournament_history, load_tournament_history
 from src.strategies.base import Strategy
@@ -38,6 +47,7 @@ HERMES_FIXTURE_STRATEGIES = (
 KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1", *HERMES_FIXTURE_STRATEGIES)
 DEFAULT_COMPARISON_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
 COMPARISON_FIXTURES = SIMULATION_FIXTURES
+FIXTURE_SWEEP_FIXTURES = tuple(fixture for fixture in COMPARISON_FIXTURES if fixture != "flat")
 
 
 def run_init_db() -> None:
@@ -140,6 +150,42 @@ def run_compare_strategies(
             output_dir=output_dir,
         )
         print("Saved comparison artifacts:")
+        print(f"JSON: {artifacts.json_path}")
+        print(f"CSV: {artifacts.csv_path}")
+        print(f"Markdown: {artifacts.markdown_path}")
+
+
+def run_fixture_sweep(
+    strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES,
+    include_hermes_fixtures: bool = False,
+    save: bool = False,
+    output_dir: Path | str = Path("data/experiments"),
+) -> None:
+    settings = Settings.from_env()
+    initialize_database(settings.database_path)
+    selected_strategy_names = _comparison_strategy_names(
+        strategy_names=strategy_names,
+        include_hermes_fixtures=include_hermes_fixtures,
+    )
+
+    ranked_results_by_fixture: dict[str, list[dict]] = {}
+    for fixture in FIXTURE_SWEEP_FIXTURES:
+        reports: list[dict] = []
+        for strategy_name in selected_strategy_names:
+            strategy = build_strategy(strategy_name)
+            local_result = run_strategy_dry_run(strategy, settings, simulation_fixture=fixture)
+            report_result = generate_daily_report(settings.database_path, run_id=local_result.run_id)
+            if not report_result.ok or report_result.report is None:
+                print(f"Fixture sweep unavailable for {fixture}/{strategy.strategy_id}: {report_result.message}")
+                raise SystemExit(1)
+            reports.append(report_result.report)
+        ranked_results_by_fixture[fixture] = rank_strategy_reports(reports)
+
+    summary = summarize_fixture_sweep(ranked_results_by_fixture)
+    print(format_fixture_sweep(summary))
+    if save:
+        artifacts = save_fixture_sweep_artifacts(summary=summary, output_dir=output_dir)
+        print("Saved fixture sweep artifacts:")
         print(f"JSON: {artifacts.json_path}")
         print(f"CSV: {artifacts.csv_path}")
         print(f"Markdown: {artifacts.markdown_path}")
@@ -271,6 +317,26 @@ def main() -> None:
         default=Path("data/experiments"),
         help="Directory for saved comparison artifacts. Defaults to data/experiments.",
     )
+    fixture_sweep_parser = subparsers.add_parser(
+        "fixture-sweep",
+        help="Run local strategy comparison across deterministic non-flat fixtures",
+    )
+    fixture_sweep_parser.add_argument(
+        "--include-hermes-fixtures",
+        action="store_true",
+        help="Include parser-only local Hermes JSON fixture strategies in the sweep.",
+    )
+    fixture_sweep_parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save JSON, CSV, and Markdown fixture sweep artifacts to the output directory.",
+    )
+    fixture_sweep_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory for saved fixture sweep artifacts. Defaults to data/experiments.",
+    )
     history_parser = subparsers.add_parser(
         "tournament-history",
         help="Review saved local compare-strategies JSON artifacts",
@@ -380,6 +446,12 @@ def main() -> None:
             save=args.save,
             output_dir=args.output_dir,
             include_hermes_fixtures=args.include_hermes_fixtures,
+        )
+    elif args.command == "fixture-sweep":
+        run_fixture_sweep(
+            include_hermes_fixtures=args.include_hermes_fixtures,
+            save=args.save,
+            output_dir=args.output_dir,
         )
     elif args.command == "tournament-history":
         run_tournament_history(output_dir=args.output_dir)

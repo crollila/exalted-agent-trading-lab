@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6L fixture scenario expansion completed.
+Phase 6M fixture sweep tournament completed.
 
 Included:
 
@@ -57,6 +57,11 @@ Included:
 - Expanded deterministic local comparison fixtures: `bull_trend`, `bear_trend`, `sideways_chop`, `volatile_reversal`, `spy_outperformance`, and `momentum_crash`.
 - Existing `flat` and `multi_day` fixture behavior remains backward compatible, with `multi_day` still the default for strategy comparison.
 - New fixture artifacts flow through tournament history, tournament champion, leaderboard export, and analysis-note generation.
+- `fixture-sweep` CLI command for running local strategy comparison across all deterministic non-flat fixtures.
+- `fixture-sweep --include-hermes-fixtures` support for adding parser-only local Hermes fixture strategies to the sweep.
+- `fixture-sweep --save` and `--output-dir` support for ignored runtime JSON, CSV, and Markdown sweep artifacts under `data/experiments`.
+- Fixture sweep output includes per-fixture winners, strategy aggregate wins, average score, average excess return, worst max drawdown, overall robust champion, score formula, score explanation, and safety disclaimer.
+- Overall robust champion tie-breakers use most fixture wins, higher average score, higher average excess return, lower worst drawdown severity, then strategy ID alphabetical.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -90,7 +95,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6L fixture scenario expansion, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6M fixture sweep tournament, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

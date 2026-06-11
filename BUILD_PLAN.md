@@ -421,6 +421,38 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6M - Fixture sweep tournament
+
+Status: complete for local cross-fixture robustness summaries.
+
+Included:
+
+- `fixture-sweep` CLI command for running local strategy comparisons across deterministic non-flat fixtures.
+- Sweep fixtures: `multi_day`, `bull_trend`, `bear_trend`, `sideways_chop`, `volatile_reversal`, `spy_outperformance`, and `momentum_crash`.
+- `flat` is excluded from fixture sweeps by default.
+- `fixture-sweep --include-hermes-fixtures` adds parser-only local Hermes fixture strategies.
+- `fixture-sweep --save` writes JSON, CSV, and Markdown sweep artifacts.
+- `fixture-sweep --output-dir` selects the artifact directory, defaulting to ignored runtime output under `data/experiments`.
+- Beginner-readable CLI output includes fixture winners, winning scores, strategy wins, average score, average excess return, worst max drawdown, overall robust champion, score formula, score explanation, and safety disclaimer.
+- Overall robust champion tie-breakers use most fixture wins, higher average score, higher average excess return, lower worst drawdown severity, then strategy ID alphabetical.
+- Saved sweep artifacts include timestamp, fixtures included, per-fixture winners, per-strategy aggregate robustness metrics, overall champion, score formula, and score explanation.
+- Tests cover fixture inclusion, flat exclusion, per-fixture winners, aggregate wins, average score, average excess return, worst drawdown, deterministic tie-breakers, Hermes fixture inclusion, saved artifacts, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold
