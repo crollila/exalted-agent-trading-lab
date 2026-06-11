@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6H strategy leaderboard README/report export completed.
+Phase 6I README project showcase polish completed.
 
 Included:
 
@@ -43,6 +43,7 @@ Included:
 - `export-leaderboard --output-dir` and `--report-path` support, defaulting to ignored runtime paths under `data/experiments` and `data/reports/strategy_leaderboard.md`.
 - Leaderboard report includes generated timestamp, current champion summary, score formula, safety disclaimer, recent tournament table, strategy aggregate table, fixture caveats, artifact source directory, and skipped/malformed artifact count when applicable.
 - Leaderboard export creates missing report directories and does not write a report when no valid artifacts exist.
+- Top-level README now includes a concise project summary, portfolio/recruiting review notes, architecture flow, safety disclaimer, current capabilities, beginner command workflow, and a portfolio note.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -76,7 +77,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6H strategy leaderboard export, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6I README project showcase polish, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

@@ -296,6 +296,34 @@ Not included:
 - Hermes runtime wiring.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6I - README project showcase polish
+
+Status: complete for documentation-only README polish.
+
+Included:
+
+- Concise top-level project summary for GitHub visitors.
+- Portfolio/recruiting-focused "What this project demonstrates" section.
+- Architecture flow from strategy or Hermes fixture through risk engine, execution, SQLite logs, and reports.
+- Clear research-lab framing that avoids claims of proven trading edge or live profitability.
+- Safety disclaimer covering dry-run default, Alpaca paper wrapper only, no live trading, no options, no margin, no shorting, no LLM direct execution, and no real API keys in source.
+- Current capabilities section covering deterministic risk, Alpaca paper wrapper, SPY benchmark reports, run-aware reporting, strategy comparison, multi-day fixtures, Hermes parser-only fixtures, tournament reports, and leaderboard export.
+- Beginner command workflow for setup, tests, dry-run, comparison, saved artifacts, tournament history, champion report, and leaderboard export.
+- Portfolio note describing Python, SQLite, testing, CLI design, deterministic risk controls, paper-trading safety, reporting/analytics, and AI-agent safety boundaries.
+
+Not included:
+
+- Source code behavior changes.
+- Test changes.
+- Trading permission changes.
+- Risk policy changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold
