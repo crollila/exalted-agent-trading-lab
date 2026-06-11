@@ -10,6 +10,12 @@ from src.execution.local_runner import run_strategy_dry_run
 from src.reporting.analysis_notes import create_strategy_analysis_note
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
+from src.reporting.research_decisions import (
+    ALLOWED_RESEARCH_DECISIONS,
+    DEFAULT_DECISION_LEDGER_PATH,
+    read_research_decision_ledger,
+    record_research_decision,
+)
 from src.reporting.strategy_comparison import format_strategy_comparison, save_strategy_comparison_artifacts
 from src.reporting.tournament_champion import format_tournament_champion, load_tournament_champion
 from src.reporting.tournament_history import format_tournament_history, load_tournament_history
@@ -166,6 +172,35 @@ def run_create_analysis_note(
     print(result.message)
 
 
+def run_record_research_decision(
+    strategy_id: str,
+    decision: str,
+    reason: str,
+    ledger_path: Path | str = DEFAULT_DECISION_LEDGER_PATH,
+    source_note: Path | str | None = None,
+    next_action: str | None = None,
+) -> None:
+    try:
+        result = record_research_decision(
+            strategy_id=strategy_id,
+            decision=decision,
+            reason=reason,
+            ledger_path=ledger_path,
+            source_note=source_note,
+            next_action=next_action,
+        )
+    except ValueError as exc:
+        print(f"Research decision unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(result.message)
+
+
+def run_research_decisions(ledger_path: Path | str = DEFAULT_DECISION_LEDGER_PATH) -> None:
+    result = read_research_decision_ledger(ledger_path=ledger_path)
+    print(result.message)
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -293,6 +328,40 @@ def main() -> None:
         action="store_true",
         help="Overwrite the analysis note if the deterministic filename already exists.",
     )
+    decision_parser = subparsers.add_parser(
+        "record-research-decision",
+        help="Append a local strategy research decision to the Markdown ledger",
+    )
+    decision_parser.add_argument("--strategy-id", required=True, help="Strategy ID the decision applies to.")
+    decision_parser.add_argument(
+        "--decision",
+        choices=ALLOWED_RESEARCH_DECISIONS,
+        required=True,
+        help="Research decision for the strategy.",
+    )
+    decision_parser.add_argument("--reason", required=True, help="Human-readable reason for the decision.")
+    decision_parser.add_argument(
+        "--source-note",
+        type=Path,
+        help="Optional source analysis note path.",
+    )
+    decision_parser.add_argument("--next-action", help="Optional follow-up action to test next.")
+    decision_parser.add_argument(
+        "--ledger-path",
+        type=Path,
+        default=DEFAULT_DECISION_LEDGER_PATH,
+        help="Markdown decision ledger path. Defaults to data/notes/research_decisions.md.",
+    )
+    read_decisions_parser = subparsers.add_parser(
+        "research-decisions",
+        help="Print the local strategy research decision ledger",
+    )
+    read_decisions_parser.add_argument(
+        "--ledger-path",
+        type=Path,
+        default=DEFAULT_DECISION_LEDGER_PATH,
+        help="Markdown decision ledger path. Defaults to data/notes/research_decisions.md.",
+    )
 
     args = parser.parse_args()
 
@@ -320,6 +389,17 @@ def main() -> None:
         run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
+    elif args.command == "record-research-decision":
+        run_record_research_decision(
+            strategy_id=args.strategy_id,
+            decision=args.decision,
+            reason=args.reason,
+            ledger_path=args.ledger_path,
+            source_note=args.source_note,
+            next_action=args.next_action,
+        )
+    elif args.command == "research-decisions":
+        run_research_decisions(ledger_path=args.ledger_path)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

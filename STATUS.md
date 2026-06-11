@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6J strategy notes / post-run analysis templates completed.
+Phase 6K research decision ledger completed.
 
 Included:
 
@@ -49,6 +49,11 @@ Included:
 - `create-analysis-note --force` support for explicit safe overwrites when the deterministic note filename already exists.
 - Analysis notes include generated timestamp, source artifact path, tournament timestamp, fixture name, winner strategy ID, winner score, ranking table, score formula, safety disclaimer, human review prompts, and decision checkboxes.
 - Malformed tournament artifacts are skipped safely during analysis-note generation, and empty or missing artifact directories produce beginner-readable messages without tracebacks.
+- `record-research-decision` CLI command for appending structured local research decisions to `data/notes/research_decisions.md`.
+- `record-research-decision --strategy-id`, `--decision`, `--reason`, `--source-note`, `--next-action`, and `--ledger-path` support.
+- Research decision validation for `promote`, `modify`, `retest`, `retire`, and `no_decision`.
+- `research-decisions` CLI command for reading the local Markdown decision ledger or printing a clear no-ledger message.
+- Research decision entries include timestamp, strategy ID, decision, reason, optional source note path, optional next action, and a safety reminder that the entry is not live trading approval and changes no broker/order behavior.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -82,7 +87,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6J strategy notes / post-run analysis templates, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6K research decision ledger, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

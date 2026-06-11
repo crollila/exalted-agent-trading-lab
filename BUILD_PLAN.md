@@ -357,6 +357,38 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6K - Research decision ledger
+
+Status: complete for local Markdown research-decision logging.
+
+Included:
+
+- `record-research-decision` CLI command for appending one structured decision entry per invocation.
+- Default local ledger path: `data/notes/research_decisions.md`.
+- Notes directory creation when missing.
+- Required `--strategy-id`, `--decision`, and `--reason` fields.
+- Optional `--source-note`, `--next-action`, and `--ledger-path` fields.
+- Decision validation for `promote`, `modify`, `retest`, `retire`, and `no_decision`.
+- `research-decisions` CLI command for printing the existing ledger or a clear no-ledger message.
+- Ledger entries include timestamp, strategy ID, decision, reason, optional source note path, optional next action, and safety reminder.
+- Runtime decision ledgers remain under ignored `data/notes`.
+- Tests cover new ledger creation, multiple appends, allowed decisions, invalid decisions, missing fields, optional source note path, optional next action, safety reminder, read behavior, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

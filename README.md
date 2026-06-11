@@ -56,6 +56,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Tournament champion report across saved ranked tournaments.
 - Leaderboard Markdown export to an ignored runtime report path.
 - Strategy tournament analysis note templates for repeatable human post-run review.
+- Research decision ledger for recording promote/modify/retest/retire/no-decision outcomes.
 
 ## Beginner command workflow
 
@@ -131,6 +132,15 @@ python -m src.main create-analysis-note --output-dir data/experiments --notes-di
 python -m src.main create-analysis-note --force
 ```
 
+Record and review research decisions:
+
+```bash
+python -m src.main record-research-decision --strategy-id momentum_v1 --decision retest --reason "Won fixture but needs more scenarios"
+python -m src.main record-research-decision --strategy-id momentum_v1 --decision retest --reason "Won fixture but needs more scenarios" --next-action "Run more fixtures"
+python -m src.main record-research-decision --strategy-id momentum_v1 --decision retest --reason "Needs review" --source-note data/notes/example.md
+python -m src.main research-decisions
+```
+
 Generate benchmark reports:
 
 ```bash
@@ -163,7 +173,7 @@ Use `--save` to write durable local research artifacts under `data/experiments` 
 - CSV for spreadsheet review.
 - Markdown for human-readable experiment notes.
 
-Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed.
+Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed. Use `record-research-decision` and `research-decisions` to maintain an ignored local Markdown decision ledger at `data/notes/research_decisions.md`.
 
 ## Portfolio note
 
