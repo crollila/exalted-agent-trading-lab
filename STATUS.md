@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6T shorting design models completed.
+Phase 6U shorting dry-run simulator design completed.
 
 Included:
 
@@ -118,6 +118,14 @@ Included:
 - Tests prove the current executable risk flow still rejects shorting attempts.
 - Tests prove dry-run comparison and fixture sweep behavior is unchanged.
 - Phase 6T does not enable shorting, margin, options, broker shorting calls, execution changes, risk engine behavior changes, live trading, or Hermes runtime wiring.
+- Local-only shorting simulator foundation was added for future research simulation.
+- `src/simulation/shorting_simulator.py` simulates inert `ShortProposal` objects against deterministic local price inputs only.
+- Short simulation result models report opening short notional, cover price, unrealized P/L, realized P/L, optional borrow fee estimate, forced-cover detection, gross exposure, net exposure, short exposure, and simulation-only risk events.
+- Simulator tests cover profitable falling-price shorts, losing rising-price shorts, forced-cover triggers, borrow fee impact, deterministic exposure calculations, invalid `ShortProposal` rejection, and local-only inputs without Alpaca credentials.
+- Tests prove `compare-strategies` and `fixture-sweep` behavior remains unchanged.
+- Tests prove the executable risk engine still rejects shorting.
+- Phase 6U does not add a CLI command and does not write runtime artifacts.
+- Phase 6U does not enable executable shorting, options, margin, broker calls, Alpaca shorting calls, order execution changes, risk engine behavior changes, live trading, or Hermes runtime wiring.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -151,10 +159,11 @@ Current allowed mode:
 - Local strategy comparison and saved artifacts are dry-run only and do not call Alpaca, Hermes, external LLMs, market data APIs, or network services.
 - Phase 6S is only a future architecture plan; it does not change current trading permissions or risk limits.
 - Phase 6T adds inert shorting design models only; it does not change current trading permissions or risk limits.
+- Phase 6U adds local-only shorting simulation foundations only; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6T shorting design models, then consider a later shorting dry-run simulation design phase only after explicit approval.
+Review Phase 6U shorting dry-run simulator design, then consider later reporting or permission-gated simulation work only after explicit approval.
 
 ## Project manager rule
 

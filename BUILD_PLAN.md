@@ -707,11 +707,43 @@ Not included:
 - Live trading.
 - Hermes runtime wiring.
 
-### Future Phase 6U - Paper shorting dry-run simulation
+### Phase 6U - Shorting dry-run simulator design
 
-Status: planned, not implemented.
+Status: complete for isolated local-only short simulation foundation.
 
-Goal: simulate short proposals and forced-cover behavior locally after design and tests, with no broker calls.
+Goal: simulate future-facing `ShortProposal` objects with deterministic local prices only, without enabling executable shorting.
+
+Included:
+
+- Isolated simulation-only shorting module at `src/simulation/shorting_simulator.py`.
+- Local-only `simulate_short_proposal` function that accepts inert `ShortProposal` objects and deterministic local price tuples.
+- Simulation result models for short position results, risk events, gross exposure, net exposure, and short exposure.
+- Deterministic calculations for opening short notional, cover price, unrealized P/L, realized P/L, optional borrow fee estimate, forced-cover detection, gross exposure, net exposure, and short exposure.
+- Tests for profitable short simulation when price falls.
+- Tests for losing short simulation when price rises.
+- Tests for forced-cover trigger detection.
+- Tests for borrow fee impact.
+- Tests for deterministic gross/net/short exposure.
+- Tests proving invalid `ShortProposal` objects are rejected by model validation.
+- Tests proving the simulator requires only local deterministic inputs and no Alpaca credentials.
+- Tests proving `compare-strategies` and `fixture-sweep` behavior remains unchanged.
+- Tests proving the executable risk engine still rejects shorting.
+
+Not included:
+
+- Executable shorting.
+- Broker shorting calls.
+- Alpaca shorting calls.
+- Order executor changes.
+- Risk engine behavior changes.
+- Existing dry-run execution changes.
+- Real market data.
+- Runtime artifacts.
+- CLI command.
+- Margin.
+- Options.
+- Live trading.
+- Hermes runtime wiring.
 
 ### Future Phase 6V - Paper margin design
 

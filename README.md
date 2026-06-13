@@ -63,6 +63,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Opt-in status-aware filtering for local comparison and fixture sweep research commands.
 - Documentation-only advanced permissions plan for possible future shorting, margin, and options research.
 - Future-facing shorting design models for later research planning, not wired into execution.
+- Local-only shorting simulator foundation for future research, not wired into normal strategy execution.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -242,6 +243,8 @@ python -m src.main fixture-sweep --status active,promoted,retest
 `docs/advanced_permissions_plan.md` documents a future staged permission architecture for possible shorting, margin, and options research. It is a plan only. It does not enable shorting, margin, options, live trading, Hermes runtime execution, or any new broker behavior.
 
 Phase 6T adds inert shorting proposal and risk input models for future design work. They are not connected to strategies, risk execution, order execution, Alpaca, or Hermes runtime.
+
+Phase 6U adds a local-only shorting simulator foundation for deterministic research inputs. It is not connected to normal strategies, the existing risk engine, the order executor, Alpaca, or Hermes runtime.
 
 Current behavior remains stock-only, long-only, cash-only, no options, no margin, no shorting, no live trading, and no LLM direct execution.
 
