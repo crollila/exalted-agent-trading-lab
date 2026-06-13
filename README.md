@@ -52,6 +52,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Multi-scenario local fixtures for non-zero return, SPY return, excess return, and drawdown examples.
 - Hermes parser-only fixture strategies using hardcoded local JSON.
 - Hermes multi-agent strategy sandbox router for strict local JSON review of stock, short, option, margin, and rejected ideas.
+- Hermes team registry for local-only agent/team identities, roles, learning notes, and future tournament tracking placeholders.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
 - Tournament champion report across saved ranked tournaments.
@@ -161,6 +162,12 @@ Review a local Hermes sandbox proposal file:
 python -m src.main review-hermes-sandbox --file docs/examples/hermes_strategy_sandbox_example.json
 ```
 
+Review a local Hermes team registry file:
+
+```bash
+python -m src.main hermes-teams --file docs/examples/hermes_team_registry_example.json
+```
+
 Create a human analysis note from the latest valid tournament artifact:
 
 ```bash
@@ -229,6 +236,8 @@ These fixtures do not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, o
 
 Use `review-hermes-sandbox` to inspect strict local JSON from a future Hermes multi-agent team without approving execution. The router classifies `stock_long` as `paper_eligible_stock_long`, `short_stock` as `simulation_only_short`, `option_long` as `simulation_only_option`, `margin` as `simulation_only_margin`, and unknown or malformed proposals as `rejected`. The command does not call Alpaca, Hermes, LLMs, market data, or any broker, and it does not write orders or change portfolio state.
 
+Use `hermes-teams` to inspect strict local team registry JSON before any Hermes runtime integration exists. The registry tracks team IDs, agent IDs, roles, active/inactive status, optional strategy family, latest strategy placeholders, and learning notes. It is identity metadata only and does not call Alpaca, Hermes, LLMs, market data, or any broker.
+
 Use `--save` to write durable local research artifacts under `data/experiments` by default:
 
 - JSON for machine-readable review.
@@ -267,6 +276,8 @@ Phase 6W adds inert options contract, proposal, and risk input models for future
 Phase 6X adds a local-only options simulator foundation for deterministic premium inputs. It is not connected to normal strategies, the existing risk engine, the order executor, Alpaca, or Hermes runtime.
 
 Phase 7A adds a Hermes multi-agent strategy sandbox router for local JSON review only. Hermes can propose advanced ideas, but the router cannot place orders, approve execution, call brokers, call LLMs, or bypass risk controls.
+
+Phase 7B adds a Hermes agent team registry for local JSON review only. Team and agent identities help future tournaments track who submitted strategies and what they learned, but they grant no broker, order, LLM, Alpaca, or execution authority.
 
 Current executable behavior remains stock-only, long-only, cash-only, no executable options, no executable margin, no executable shorting, no live trading, and no LLM direct execution.
 

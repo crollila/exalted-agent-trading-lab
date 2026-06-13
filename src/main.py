@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.agents.hermes_team_registry import format_hermes_team_registry, load_hermes_team_registry_file
 from src.agents.hermes_strategy_sandbox import format_hermes_sandbox_result, load_hermes_sandbox_file
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
@@ -305,6 +306,16 @@ def run_review_hermes_sandbox(file_path: Path | str) -> None:
         raise SystemExit(1)
 
 
+def run_hermes_teams(file_path: Path | str) -> None:
+    try:
+        registry = load_hermes_team_registry_file(file_path)
+    except ValueError as exc:
+        print(f"Hermes team registry unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(format_hermes_team_registry(registry))
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -599,6 +610,16 @@ def main() -> None:
         required=True,
         help="Local Hermes strategy sandbox JSON file to review.",
     )
+    hermes_teams_parser = subparsers.add_parser(
+        "hermes-teams",
+        help="Review a strict local Hermes team registry without runtime calls",
+    )
+    hermes_teams_parser.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="Local Hermes team registry JSON file to review.",
+    )
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -752,6 +773,8 @@ def main() -> None:
         run_export_short_simulation_report(report_path=args.report_path)
     elif args.command == "review-hermes-sandbox":
         run_review_hermes_sandbox(file_path=args.file)
+    elif args.command == "hermes-teams":
+        run_hermes_teams(file_path=args.file)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "create-sweep-analysis-note":

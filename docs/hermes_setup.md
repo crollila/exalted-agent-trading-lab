@@ -63,6 +63,14 @@ python -m src.main review-hermes-sandbox --file docs/examples/hermes_strategy_sa
 
 The review command reads a local JSON file only. It does not initialize the database, call Alpaca, call Hermes, call an LLM, fetch network data, submit orders, write orders, or change portfolio state. Its output states that Hermes proposals are not execution approval.
 
+Phase 7B adds local Hermes team registry files before any runtime integration:
+
+```bash
+python -m src.main hermes-teams --file docs/examples/hermes_team_registry_example.json
+```
+
+The registry records team IDs, agent IDs, roles, active/inactive status, optional strategy family, latest strategy placeholders, and learning notes. It is registry metadata only. It does not call Hermes, call Alpaca, call LLMs, call brokers, submit orders, write orders, or grant execution authority.
+
 Hermes runtime remains disabled. A future Hermes process, if added, must output strict local JSON for human/Codex review and must not receive broker credentials, Alpaca access, API keys, or direct order authority.
 
 ## Parser requirements

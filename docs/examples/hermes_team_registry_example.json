@@ -1,0 +1,92 @@
+{
+  "registry_notes": "Local identity registry for Hermes-style agent team tournaments. No secrets, credentials, endpoints, or broker access.",
+  "teams": [
+    {
+      "team_id": "team_alpha",
+      "team_name": "Alpha Research Desk",
+      "description": "Balanced research team focused on cautious equity strategy proposals.",
+      "active": true,
+      "strategy_family": "quality_momentum",
+      "learning_notes": "Needs to compare momentum ideas against drawdown and rejected-trade penalties.",
+      "agents": [
+        {
+          "agent_id": "alpha_research_01",
+          "team_id": "team_alpha",
+          "agent_name": "Alpha Scout",
+          "role": "research_agent",
+          "description": "Finds candidate stock themes for local sandbox review.",
+          "active": true,
+          "model_hint": "local-hermes-placeholder",
+          "strengths": ["theme discovery", "clear theses"],
+          "weaknesses": ["can overrate momentum"],
+          "latest_strategy_id": "alpha_quality_momentum_v1",
+          "learning_notes": "Improve downside scenario notes."
+        },
+        {
+          "agent_id": "alpha_risk_01",
+          "team_id": "team_alpha",
+          "agent_name": "Alpha Guard",
+          "role": "risk_agent",
+          "description": "Reviews proposed risk assumptions before tournament submission.",
+          "active": true,
+          "strengths": ["position sizing", "risk language"],
+          "weaknesses": ["slow to accept new strategy families"],
+          "learning_notes": "Track common rejection reasons."
+        },
+        {
+          "agent_id": "alpha_review_01",
+          "team_id": "team_alpha",
+          "agent_name": "Alpha Reviewer",
+          "role": "review_agent",
+          "description": "Summarizes tournament outcomes and learning notes.",
+          "active": false,
+          "strengths": ["post-run summaries"],
+          "weaknesses": ["inactive in current round"]
+        }
+      ]
+    },
+    {
+      "team_id": "team_beta",
+      "team_name": "Beta Strategy Forge",
+      "description": "Experimental team focused on mutating strategies for future sandbox tournaments.",
+      "active": true,
+      "strategy_family": "adaptive_sandbox",
+      "learning_notes": "Compare aggressive mutations against cash-only and SPY baselines.",
+      "agents": [
+        {
+          "agent_id": "beta_mutator_01",
+          "team_id": "team_beta",
+          "agent_name": "Beta Mutator",
+          "role": "strategy_mutator",
+          "description": "Creates local-only strategy variants for later review.",
+          "active": true,
+          "model_hint": "local-hermes-placeholder",
+          "strengths": ["variant generation", "scenario thinking"],
+          "weaknesses": ["may overfit recent fixture winners"],
+          "latest_strategy_id": "beta_adaptive_v1",
+          "learning_notes": "Needs stricter robustness checks."
+        },
+        {
+          "agent_id": "beta_portfolio_01",
+          "team_id": "team_beta",
+          "agent_name": "Beta Allocator",
+          "role": "portfolio_manager",
+          "description": "Coordinates team-level proposal summaries for local review.",
+          "active": true,
+          "strengths": ["allocation framing", "team synthesis"],
+          "weaknesses": ["limited history"]
+        },
+        {
+          "agent_id": "beta_execution_01",
+          "team_id": "team_beta",
+          "agent_name": "Beta Execution Shadow",
+          "role": "execution_agent",
+          "description": "Placeholder identity for future non-executing execution-plan review.",
+          "active": false,
+          "strengths": ["dry-run process notes"],
+          "weaknesses": ["no order authority"]
+        }
+      ]
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 7A Hermes multi-agent strategy sandbox router completed.
+Phase 7B Hermes agent team registry completed.
 
 Included:
 
@@ -163,6 +163,16 @@ Included:
 - Example local sandbox payload was added at `docs/examples/hermes_strategy_sandbox_example.json`.
 - Phase 7A does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
 - Phase 7A does not submit or write orders, change portfolio state, enable advanced execution, weaken risk policy, or allow broker/order/risk bypasses.
+- Hermes agent team registry was added for strict local team/agent identity review.
+- `src/agents/hermes_team_registry.py` defines `HermesAgentProfile`, `HermesTeamProfile`, `HermesTeamRegistry`, and `HermesAgentRole`.
+- Allowed agent roles are `research_agent`, `risk_agent`, `execution_agent`, `review_agent`, `strategy_mutator`, and `portfolio_manager`.
+- Registry validation rejects missing team IDs, missing agent IDs, duplicate team IDs, duplicate agent IDs across teams, invalid roles, empty team agent lists, mismatched agent/team IDs, and extra unknown fields.
+- Agent profiles track team ID, agent name, role, description, active status, optional model hint, strengths, weaknesses, latest strategy ID, and learning notes.
+- Team profiles track team name, description, agents, active status, optional strategy family, and learning notes.
+- Example local registry was added at `docs/examples/hermes_team_registry_example.json` with `team_alpha`, `team_beta`, distinct roles, active/inactive agents, learning notes, and no secrets.
+- `hermes-teams --file` reads a local JSON file only and prints teams, agents, active/inactive status, roles, and `registry only; no trading or LLM calls`.
+- Phase 7B does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
+- Phase 7B does not submit or write orders, change portfolio state, enable advanced execution, weaken risk policy, or allow broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -201,10 +211,11 @@ Current allowed mode:
 - Phase 6W adds inert options design models only; it does not change current trading permissions or risk limits.
 - Phase 6X adds local-only options simulation foundations only; it does not change current trading permissions or risk limits.
 - Phase 7A adds local-only Hermes sandbox review only; Hermes can propose advanced ideas, but the review command cannot place orders directly, call Alpaca, call LLMs, call brokers, enable live trading, or bypass broker/order/risk controls.
+- Phase 7B adds local-only Hermes team registry review only; agent identities, roles, and learning notes do not grant broker, order, LLM, Alpaca, or execution authority.
 
 ## Next step
 
-Review Phase 7A Hermes sandbox router output, then consider later permission-gated simulation/report work only after explicit approval.
+Review Phase 7B Hermes team registry output, then consider later tournament-round tracking only after explicit approval.
 
 ## Project manager rule
 

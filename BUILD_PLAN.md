@@ -890,7 +890,36 @@ Not included:
 - Real options, short, or margin broker execution.
 - Risk bypasses.
 
-### Future Phase 7B - Advanced broker-paper implementation gate
+### Phase 7B - Hermes agent team registry
+
+Status: complete for local-only identity registry review.
+
+Goal: create the team and agent identity layer for future Hermes-style strategy tournaments.
+
+Included:
+
+- New local-only registry module at `src/agents/hermes_team_registry.py`.
+- Strict models for `HermesAgentProfile`, `HermesTeamProfile`, `HermesTeamRegistry`, and `HermesAgentRole`.
+- Allowed roles: `research_agent`, `risk_agent`, `execution_agent`, `review_agent`, `strategy_mutator`, and `portfolio_manager`.
+- Agent fields for IDs, team ID, name, role, description, active status, optional model hint, strengths, weaknesses, latest strategy ID, and learning notes.
+- Team fields for ID, name, description, agents, active status, optional strategy family, and learning notes.
+- Registry validation rejects missing IDs, duplicate team IDs, duplicate agent IDs across teams, invalid roles, empty team agent lists, mismatched agent/team IDs, and extra unknown fields.
+- Example local registry at `docs/examples/hermes_team_registry_example.json` with `team_alpha`, `team_beta`, distinct roles, active/inactive agents, learning notes, and no secrets.
+- `hermes-teams --file` CLI command reads a local JSON file and prints teams, agents, active/inactive status, roles, and the warning `registry only; no trading or LLM calls`.
+- Tests cover valid parsing, registry validation failures, credential-free CLI operation, no settings/database/Alpaca usage from the command, and unchanged sandbox/comparison/sweep commands.
+
+Not included:
+
+- Hermes runtime calls.
+- Real LLM/API calls.
+- Alpaca calls.
+- Broker calls.
+- Order submission or order writes.
+- Portfolio state changes.
+- Trading permission changes.
+- Risk bypasses.
+
+### Future Phase 7C - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 
