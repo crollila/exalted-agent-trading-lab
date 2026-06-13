@@ -665,13 +665,23 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
-### Future Phase 6T - Paper shorting design
+### Phase 6T - Shorting design models
 
-Status: planned, not implemented.
+Status: complete for future-facing model definitions and disabled-flow tests.
 
-Goal: design shorting proposal and risk models without enabling short execution.
+Goal: design shorting proposal and risk input models without enabling short execution.
 
-Required future controls:
+Included:
+
+- Separate inert shorting model definitions: `ShortProposal`, `ShortRiskLimits`, and `ShortRiskDecision`.
+- Strict shorting model validation for stock-only asset class, short action, non-empty symbol, non-empty thesis, confidence range, positive estimated price, positive bounded short exposure, explicit borrow availability assumption, and forbidden extra fields.
+- Future shorting fields for strategy ID, symbol, action, target short weight, notional exposure, estimated price, thesis, confidence, borrow availability assumption, borrow fee assumption, max-loss exit price, and forced-cover threshold.
+- Tests proving valid short models work and invalid fields are rejected.
+- Tests proving current `TradeProposal` behavior is unchanged.
+- Tests proving the current executable risk flow still rejects sell-over-position shorting attempts.
+- Tests proving `compare-strategies` and `fixture-sweep` behavior remains unchanged.
+
+Required future controls documented but not enabled:
 
 - Explicit strategy permission flag.
 - Explicit CLI/user permission flag.
@@ -683,6 +693,19 @@ Required future controls:
 - Borrow availability assumption logging.
 - Hard ban on shorting without a specific permission level.
 - No live shorting.
+
+Not included:
+
+- Shorting execution.
+- Shorting simulation.
+- Broker shorting calls.
+- Risk engine behavior changes.
+- Order execution behavior changes.
+- Trading permission changes.
+- Margin.
+- Options.
+- Live trading.
+- Hermes runtime wiring.
 
 ### Future Phase 6U - Paper shorting dry-run simulation
 

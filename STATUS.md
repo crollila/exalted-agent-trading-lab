@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6S advanced permissions architecture plan completed.
+Phase 6T shorting design models completed.
 
 Included:
 
@@ -110,6 +110,14 @@ Included:
 - Advanced permission testing requirements are documented, including fail-closed defaults and no external service or credential requirements.
 - Phase 6S is documentation-only and does not add proposal fields, risk behavior, execution behavior, broker behavior, Alpaca advanced calls, Hermes runtime wiring, or advanced trading paths.
 - Future Codex prompt `docs/codex_prompts/phase_6t_shorting_design_models.md` was added for shorting proposal/risk model design without enabling execution.
+- Future-facing shorting model definitions were added without wiring them into execution.
+- `ShortProposal`, `ShortRiskLimits`, and `ShortRiskDecision` define inert model shapes for future paper-shorting research.
+- Shorting model validation rejects non-stock asset classes, options, empty symbols, empty theses, out-of-range confidence, zero or negative prices, zero/negative/excessive short exposure, missing borrow availability assumptions, invalid short actions, and extra fields.
+- Shorting model fields include strategy ID, symbol, stock asset class, short action, target short weight, notional exposure, estimated price, thesis, confidence, borrow availability assumption, optional borrow fee assumption, optional max-loss exit price, and optional forced-cover threshold.
+- Tests prove current `TradeProposal` behavior is unchanged.
+- Tests prove the current executable risk flow still rejects shorting attempts.
+- Tests prove dry-run comparison and fixture sweep behavior is unchanged.
+- Phase 6T does not enable shorting, margin, options, broker shorting calls, execution changes, risk engine behavior changes, live trading, or Hermes runtime wiring.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -142,10 +150,11 @@ Current allowed mode:
 - Hermes parser tests require no network, credentials, Ollama, LM Studio, hosted LLM, or real market data.
 - Local strategy comparison and saved artifacts are dry-run only and do not call Alpaca, Hermes, external LLMs, market data APIs, or network services.
 - Phase 6S is only a future architecture plan; it does not change current trading permissions or risk limits.
+- Phase 6T adds inert shorting design models only; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6S advanced permissions architecture plan, then choose the next non-enabling research phase or explicit Hermes runtime prompting plan when ready.
+Review Phase 6T shorting design models, then consider a later shorting dry-run simulation design phase only after explicit approval.
 
 ## Project manager rule
 
