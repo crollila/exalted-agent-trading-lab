@@ -58,6 +58,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Strategy tournament analysis note templates for repeatable human post-run review.
 - Fixture sweep analysis note templates for reviewing cross-regime robustness.
 - Research decision ledger for recording promote/modify/retest/retire/no-decision outcomes.
+- Strategy status registry for marking strategies active, promoted, retest, modified, or retired.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -158,6 +159,15 @@ python -m src.main record-research-decision --strategy-id momentum_v1 --decision
 python -m src.main research-decisions
 ```
 
+Set and review strategy research statuses:
+
+```bash
+python -m src.main set-strategy-status --strategy-id momentum_v1 --status retest --reason "Failed cross-fixture robustness sweep"
+python -m src.main set-strategy-status --strategy-id momentum_v1 --status retest --reason "Failed cross-fixture robustness sweep" --next-action "Modify or replace momentum logic"
+python -m src.main set-strategy-status --strategy-id momentum_v1 --status retest --reason "Needs review" --source-note data/notes/example.md
+python -m src.main strategy-status
+```
+
 Generate benchmark reports:
 
 ```bash
@@ -201,7 +211,7 @@ Use `--save` to write durable local research artifacts under `data/experiments` 
 - CSV for spreadsheet review.
 - Markdown for human-readable experiment notes.
 
-Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed. Use `record-research-decision` and `research-decisions` to maintain an ignored local Markdown decision ledger at `data/notes/research_decisions.md`.
+Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed. Use `record-research-decision` and `research-decisions` to maintain an ignored local Markdown decision ledger at `data/notes/research_decisions.md`. Use `set-strategy-status` and `strategy-status` to maintain an ignored local Markdown status registry at `data/notes/strategy_status.md`.
 
 Use `fixture-sweep` to run the same local strategy set across all deterministic non-flat fixtures and summarize fixture winners, aggregate wins, average score, average excess return, worst drawdown, and an overall robust champion. Sweep artifacts are ignored runtime outputs under `data/experiments` when `--save` is passed. Use `export-fixture-sweep-leaderboard` to generate a clean Markdown robustness report at `data/reports/fixture_sweep_leaderboard.md` by default. Use `create-sweep-analysis-note` to turn the latest valid saved fixture sweep artifact into a Markdown human review template under `data/notes` by default. Existing sweep notes are not overwritten unless `--force` is passed.
 

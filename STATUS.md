@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6O fixture sweep analysis notes completed.
+Phase 6P strategy status registry completed.
 
 Included:
 
@@ -72,6 +72,12 @@ Included:
 - Sweep analysis notes use deterministic Windows-safe filenames derived from the sweep timestamp.
 - Sweep analysis notes include generated timestamp, source sweep artifact path, sweep timestamp, fixtures included, overall robust champion, champion metrics, per-fixture winner table, strategy robustness table, score formula/explanation, safety disclaimer, human review prompts, and decision checklist.
 - Malformed fixture sweep artifacts are skipped safely during sweep analysis-note generation, and empty or missing artifact directories produce beginner-readable messages without tracebacks.
+- `set-strategy-status` CLI command for appending local Markdown research status entries to `data/notes/strategy_status.md`.
+- `set-strategy-status --strategy-id`, `--status`, `--reason`, `--source-note`, `--next-action`, and `--registry-path` support.
+- Strategy status validation for `active`, `promoted`, `retest`, `modified`, and `retired`.
+- `strategy-status` CLI command for printing current latest strategy statuses plus append-only history.
+- Strategy status entries include timestamp, strategy ID, status, reason, optional source note path, optional next action, and a safety reminder that the entry is research status only and not live trading approval.
+- Retired-strategy filtering for comparison/sweep execution was intentionally left as a TODO to avoid changing tournament behavior in this phase.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -82,7 +88,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, analysis notes, fixture sweep analysis notes, research decisions, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, analysis notes, fixture sweep analysis notes, research decisions, strategy status registry, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -105,7 +111,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6O fixture sweep analysis notes, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6P strategy status registry, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

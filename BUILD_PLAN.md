@@ -519,6 +519,44 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6P - Strategy status registry
+
+Status: complete for local append-only research status tracking.
+
+Included:
+
+- `set-strategy-status` CLI command appends local Markdown status entries.
+- Default registry path is `data/notes/strategy_status.md`.
+- `set-strategy-status --strategy-id`, `--status`, `--reason`, `--source-note`, `--next-action`, and `--registry-path` support.
+- Valid statuses are `active`, `promoted`, `retest`, `modified`, and `retired`.
+- Notes directory is created when missing.
+- `strategy-status` CLI command prints current latest statuses and preserved history.
+- `strategy-status --registry-path` selects a non-default registry for tests or alternate local ledgers.
+- Entries include timestamp, strategy ID, status, reason, optional source note path, optional next action, and safety reminder.
+- Status history is preserved in the same append-only Markdown file.
+- Latest status per strategy is shown clearly before the history section.
+- `data/notes` remains ignored by git.
+- Tests cover new registry creation, valid statuses, invalid status rejection, updating the same strategy, latest-status display, history preservation, optional source note path, optional next action, safety reminder, no-file behavior, read behavior, CLI output, and no external service or credential requirement.
+
+Deferred:
+
+- Retired-strategy filtering for `compare-strategies` or `fixture-sweep` is left as a TODO because it would change tournament execution behavior and needs a separate careful pass.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

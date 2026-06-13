@@ -23,6 +23,12 @@ from src.reporting.research_decisions import (
     read_research_decision_ledger,
     record_research_decision,
 )
+from src.reporting.strategy_status import (
+    ALLOWED_STRATEGY_STATUSES,
+    DEFAULT_STRATEGY_STATUS_PATH,
+    read_strategy_status_registry,
+    set_strategy_status,
+)
 from src.reporting.strategy_comparison import (
     format_strategy_comparison,
     rank_strategy_reports,
@@ -266,6 +272,35 @@ def run_research_decisions(ledger_path: Path | str = DEFAULT_DECISION_LEDGER_PAT
     print(result.message)
 
 
+def run_set_strategy_status(
+    strategy_id: str,
+    status: str,
+    reason: str,
+    registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
+    source_note: Path | str | None = None,
+    next_action: str | None = None,
+) -> None:
+    try:
+        result = set_strategy_status(
+            strategy_id=strategy_id,
+            status=status,
+            reason=reason,
+            registry_path=registry_path,
+            source_note=source_note,
+            next_action=next_action,
+        )
+    except ValueError as exc:
+        print(f"Strategy status unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(result.message)
+
+
+def run_strategy_status(registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH) -> None:
+    result = read_strategy_status_registry(registry_path=registry_path)
+    print(result.message)
+
+
 def _comparison_strategy_names(
     strategy_names: tuple[str, ...],
     include_hermes_fixtures: bool,
@@ -484,6 +519,40 @@ def main() -> None:
         default=DEFAULT_DECISION_LEDGER_PATH,
         help="Markdown decision ledger path. Defaults to data/notes/research_decisions.md.",
     )
+    status_parser = subparsers.add_parser(
+        "set-strategy-status",
+        help="Append a local research status for a strategy",
+    )
+    status_parser.add_argument("--strategy-id", required=True, help="Strategy ID the status applies to.")
+    status_parser.add_argument(
+        "--status",
+        choices=ALLOWED_STRATEGY_STATUSES,
+        required=True,
+        help="Research status for the strategy.",
+    )
+    status_parser.add_argument("--reason", required=True, help="Human-readable reason for the status.")
+    status_parser.add_argument(
+        "--source-note",
+        type=Path,
+        help="Optional source analysis note path.",
+    )
+    status_parser.add_argument("--next-action", help="Optional follow-up action to test next.")
+    status_parser.add_argument(
+        "--registry-path",
+        type=Path,
+        default=DEFAULT_STRATEGY_STATUS_PATH,
+        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
+    )
+    read_status_parser = subparsers.add_parser(
+        "strategy-status",
+        help="Print the local strategy status registry",
+    )
+    read_status_parser.add_argument(
+        "--registry-path",
+        type=Path,
+        default=DEFAULT_STRATEGY_STATUS_PATH,
+        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
+    )
 
     args = parser.parse_args()
 
@@ -532,6 +601,17 @@ def main() -> None:
         )
     elif args.command == "research-decisions":
         run_research_decisions(ledger_path=args.ledger_path)
+    elif args.command == "set-strategy-status":
+        run_set_strategy_status(
+            strategy_id=args.strategy_id,
+            status=args.status,
+            reason=args.reason,
+            registry_path=args.registry_path,
+            source_note=args.source_note,
+            next_action=args.next_action,
+        )
+    elif args.command == "strategy-status":
+        run_strategy_status(registry_path=args.registry_path)
     else:
         raise ValueError(f"Unknown command: {args.command}")
 
