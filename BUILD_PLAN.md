@@ -777,40 +777,48 @@ Not included:
 - Live trading.
 - Hermes runtime wiring.
 
-### Future Phase 6W - Paper margin design
+### Phase 6W - Options design models
+
+Status: complete for future-facing model definitions and disabled-flow tests.
+
+Goal: design option proposal and risk input models without enabling options execution.
+
+Included:
+
+- Separate inert options model definitions: `OptionContract`, `OptionProposal`, `OptionRiskLimits`, and `OptionRiskDecision`.
+- Strict option validation for required underlying symbol, call/put option type, buy-to-open or buy-to-close actions only, no sell-to-open actions, future expiration only, positive strike, positive contract count, positive premium, positive estimated total premium, non-empty thesis, confidence range, non-empty liquidity/open-interest assumption, non-empty assignment/exercise risk note, optional Greeks, and forbidden extra fields.
+- Future option risk defaults for max premium at risk, max contracts per trade, max portfolio option exposure, no 0DTE, no naked short options, no live options, and broker option execution disabled by default.
+- Inert `check_option_risk` helper for model-level future design checks, including excessive contracts, excessive premium, projected portfolio option exposure, and fail-closed disabled options permission.
+- Tests proving valid option proposals work and invalid option type, sell-to-open/naked-short actions, 0DTE expiration, invalid strike/contracts/premium, missing thesis, missing risk note, invalid confidence, extra fields, and excessive contracts/premium are rejected.
+- Tests proving current `TradeProposal` behavior is unchanged.
+- Tests proving the current executable risk flow still rejects options.
+- Tests proving `compare-strategies` and `fixture-sweep` behavior remains unchanged.
+
+Not included:
+
+- Options execution.
+- Broker options calls.
+- Alpaca options calls.
+- Order executor changes.
+- Existing risk engine behavior changes.
+- Existing dry-run execution changes.
+- Strategy options integration.
+- Executable shorting.
+- Margin.
+- Live trading.
+- Hermes runtime wiring.
+
+### Future Phase 6X - Paper margin design
 
 Status: planned, not implemented.
 
 Goal: design explicit margin permission, exposure accounting, margin call simulation, daily loss limits, and forced deleveraging without enabling margin.
 
-### Future Phase 6X - Paper margin dry-run simulation
+### Future Phase 6Y - Paper margin dry-run simulation
 
 Status: planned, not implemented.
 
 Goal: simulate margin exposure and forced deleveraging locally after design and tests, with no broker calls.
-
-### Future Phase 6Y - Paper options design
-
-Status: planned, not implemented.
-
-Goal: design explicit option contract models and risk controls without enabling options.
-
-Required future controls:
-
-- Underlying symbol.
-- Call or put.
-- Expiration.
-- Strike.
-- Quantity/contracts.
-- Premium.
-- Max premium at risk.
-- Max contracts.
-- Greeks fields if available.
-- Liquidity/open-interest assumptions.
-- Assignment/exercise risk notes.
-- No 0DTE at first.
-- No naked short options at first.
-- No live options.
 
 ### Future Phase 6Z - Paper options dry-run simulation
 

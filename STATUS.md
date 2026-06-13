@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6V shorting simulation report export completed.
+Phase 6W options design models completed.
 
 Included:
 
@@ -133,6 +133,16 @@ Included:
 - Short simulation report export creates missing report directories, prints `simulation only`, and does not require credentials.
 - Tests prove the report includes the simulation-only disclaimer, key metrics, forced-cover/risk event status, output directory creation, and CLI operation without credentials.
 - Phase 6V does not change compare-strategies behavior, fixture-sweep behavior, broker/order execution behavior, existing risk-engine permissions, dry-run execution, Alpaca behavior, strategy wiring, or Hermes runtime wiring.
+- Future-facing options model definitions were added without wiring them into execution.
+- `OptionContract`, `OptionProposal`, `OptionRiskLimits`, and `OptionRiskDecision` define inert model shapes for future paper-options research.
+- Options model validation rejects missing underlying symbols, invalid option types, sell-to-open or other naked-short option actions, 0DTE or past expiration, invalid strike/contracts/premium, missing thesis, missing liquidity/open-interest assumptions, missing assignment/exercise risk notes, invalid confidence, and extra fields.
+- Options model fields include strategy ID, underlying symbol, call/put type, buy-to-open or buy-to-close action, expiration, strike, contract count, premium, estimated total premium, thesis, confidence, liquidity/open-interest assumption, assignment/exercise risk note, optional open interest, and optional Greeks.
+- Option risk-limit defaults keep options permission disabled, no 0DTE enabled, naked short options disabled, live options disabled, and broker option execution disabled.
+- Tests prove excessive option contracts and premium are rejected by the inert option risk checker.
+- Tests prove current `TradeProposal` behavior is unchanged.
+- Tests prove the current executable risk flow still rejects options.
+- Tests prove dry-run comparison and fixture sweep behavior is unchanged.
+- Phase 6W does not change compare-strategies behavior, fixture-sweep behavior, broker/order execution behavior, existing risk-engine permissions, dry-run execution, Alpaca behavior, strategy wiring, executable shorting, margin, live trading, or Hermes runtime wiring.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -168,10 +178,11 @@ Current allowed mode:
 - Phase 6T adds inert shorting design models only; it does not change current trading permissions or risk limits.
 - Phase 6U adds local-only shorting simulation foundations only; it does not change current trading permissions or risk limits.
 - Phase 6V adds local-only shorting simulation report export only; it does not change current trading permissions or risk limits.
+- Phase 6W adds inert options design models only; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6V shorting simulation report export, then consider later permission-gated simulation work only after explicit approval.
+Review Phase 6W options design models, then consider later permission-gated simulation work only after explicit approval.
 
 ## Project manager rule
 

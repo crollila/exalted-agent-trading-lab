@@ -65,6 +65,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Future-facing shorting design models for later research planning, not wired into execution.
 - Local-only shorting simulator foundation for future research, not wired into normal strategy execution.
 - Local-only shorting simulation Markdown report export for deterministic examples only.
+- Future-facing options design models for later research planning, not wired into execution.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -250,6 +251,8 @@ Phase 6T adds inert shorting proposal and risk input models for future design wo
 Phase 6U adds a local-only shorting simulator foundation for deterministic research inputs. It is not connected to normal strategies, the existing risk engine, the order executor, Alpaca, or Hermes runtime.
 
 Phase 6V adds a local-only shorting simulation report export for deterministic examples. It writes an ignored Markdown report and does not enable executable shorting, broker calls, Alpaca calls, margin, options, strategy wiring, risk-engine permission changes, or Hermes runtime wiring.
+
+Phase 6W adds inert options contract, proposal, and risk input models for future design work. They reject 0DTE, sell-to-open/naked-short actions, invalid premiums/contracts, missing thesis/risk notes, and extra fields, but they are not connected to strategies, risk execution, order execution, Alpaca, or Hermes runtime.
 
 Current behavior remains stock-only, long-only, cash-only, no options, no margin, no shorting, no live trading, and no LLM direct execution.
 
