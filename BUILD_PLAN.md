@@ -485,6 +485,40 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6O - Fixture sweep analysis notes
+
+Status: complete for local fixture sweep human-review notes.
+
+Included:
+
+- `create-sweep-analysis-note` CLI command reads saved `fixture_sweep_*.json` artifacts.
+- `create-sweep-analysis-note --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- `create-sweep-analysis-note --notes-dir` selects the Markdown note directory, defaulting to `data/notes`.
+- `create-sweep-analysis-note --force` explicitly overwrites the deterministic note file when needed.
+- Most recent valid fixture sweep artifact is selected by default.
+- Notes directory is created when missing.
+- Existing sweep notes are not overwritten unless `--force` is passed.
+- Missing, empty, malformed, and mixed valid/malformed artifact directories are handled without tracebacks.
+- Note filenames are deterministic and Windows-safe, using the sweep timestamp.
+- Markdown notes include generated timestamp, source sweep artifact path, sweep timestamp, fixtures included, overall robust champion, champion metrics, per-fixture winner table, strategy robustness table, score formula/explanation, safety disclaimer, human review prompts, and decision checklist.
+- Runtime notes under `data/notes` remain ignored by git.
+- Tests cover one valid sweep artifact, most recent artifact selection, malformed-artifact skipping, no-valid-artifact behavior, notes directory creation, no-overwrite behavior, force overwrite behavior, source artifact path, robust champion, per-fixture winner table, strategy robustness table, human review prompts, decision checklist, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

@@ -13,6 +13,7 @@ from src.reporting.fixture_sweep import (
     save_fixture_sweep_artifacts,
     summarize_fixture_sweep,
 )
+from src.reporting.fixture_sweep_analysis_notes import create_sweep_analysis_note
 from src.reporting.fixture_sweep_leaderboard_export import export_fixture_sweep_leaderboard
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
@@ -227,6 +228,15 @@ def run_create_analysis_note(
     print(result.message)
 
 
+def run_create_sweep_analysis_note(
+    output_dir: Path | str = Path("data/experiments"),
+    notes_dir: Path | str = Path("data/notes"),
+    force: bool = False,
+) -> None:
+    result = create_sweep_analysis_note(output_dir=output_dir, notes_dir=notes_dir, force=force)
+    print(result.message)
+
+
 def run_record_research_decision(
     strategy_id: str,
     decision: str,
@@ -419,6 +429,27 @@ def main() -> None:
         action="store_true",
         help="Overwrite the analysis note if the deterministic filename already exists.",
     )
+    sweep_analysis_note_parser = subparsers.add_parser(
+        "create-sweep-analysis-note",
+        help="Create a Markdown human review note from the latest saved fixture sweep",
+    )
+    sweep_analysis_note_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved fixture sweep JSON artifacts. Defaults to data/experiments.",
+    )
+    sweep_analysis_note_parser.add_argument(
+        "--notes-dir",
+        type=Path,
+        default=Path("data/notes"),
+        help="Directory for sweep analysis note Markdown files. Defaults to data/notes.",
+    )
+    sweep_analysis_note_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the sweep analysis note if the deterministic filename already exists.",
+    )
     decision_parser = subparsers.add_parser(
         "record-research-decision",
         help="Append a local strategy research decision to the Markdown ledger",
@@ -488,6 +519,8 @@ def main() -> None:
         run_export_fixture_sweep_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
+    elif args.command == "create-sweep-analysis-note":
+        run_create_sweep_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "record-research-decision":
         run_record_research_decision(
             strategy_id=args.strategy_id,

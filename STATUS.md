@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6N fixture sweep leaderboard export completed.
+Phase 6O fixture sweep analysis notes completed.
 
 Included:
 
@@ -67,6 +67,11 @@ Included:
 - Fixture sweep leaderboard export creates missing report directories and does not write a report when no valid fixture sweep artifacts exist.
 - Fixture sweep leaderboard report includes generated timestamp, source artifact directory, current robust champion summary, fixture list, score formula/explanation, safety disclaimer, per-fixture winner table, strategy robustness aggregate table, caveats, most recent sweep artifact path, and skipped/malformed artifact count.
 - Malformed fixture sweep artifacts are skipped safely during leaderboard export and reported without crashing.
+- `create-sweep-analysis-note` CLI command for generating local Markdown human review templates from the latest valid saved fixture sweep artifact.
+- `create-sweep-analysis-note --output-dir`, `--notes-dir`, and `--force` support, defaulting to ignored runtime paths under `data/experiments` and `data/notes`.
+- Sweep analysis notes use deterministic Windows-safe filenames derived from the sweep timestamp.
+- Sweep analysis notes include generated timestamp, source sweep artifact path, sweep timestamp, fixtures included, overall robust champion, champion metrics, per-fixture winner table, strategy robustness table, score formula/explanation, safety disclaimer, human review prompts, and decision checklist.
+- Malformed fixture sweep artifacts are skipped safely during sweep analysis-note generation, and empty or missing artifact directories produce beginner-readable messages without tracebacks.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -77,7 +82,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, analysis notes, research decisions, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, analysis notes, fixture sweep analysis notes, research decisions, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -100,7 +105,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6N fixture sweep leaderboard export, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6O fixture sweep analysis notes, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 
