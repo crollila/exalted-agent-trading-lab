@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6U shorting dry-run simulator design completed.
+Phase 6V shorting simulation report export completed.
 
 Included:
 
@@ -126,6 +126,13 @@ Included:
 - Tests prove the executable risk engine still rejects shorting.
 - Phase 6U does not add a CLI command and does not write runtime artifacts.
 - Phase 6U does not enable executable shorting, options, margin, broker calls, Alpaca shorting calls, order execution changes, risk engine behavior changes, live trading, or Hermes runtime wiring.
+- Local-only shorting simulation report export was added for deterministic review of the isolated shorting simulator.
+- `src/reporting/shorting_simulation_report.py` builds a Markdown report from one hardcoded local `ShortProposal` fixture and deterministic local prices.
+- `export-short-simulation-report` CLI command writes to ignored runtime path `data/reports/shorting_simulation_report.md` by default and supports `--report-path`.
+- The short simulation report includes generated timestamp, simulation-only disclaimer, proposal symbol/action/target short weight, entry price, cover price, gross exposure, net exposure, short exposure, gross P/L, realized/unrealized P/L, borrow fee estimate, forced-cover status, risk event status, and a statement that executable shorting remains disabled.
+- Short simulation report export creates missing report directories, prints `simulation only`, and does not require credentials.
+- Tests prove the report includes the simulation-only disclaimer, key metrics, forced-cover/risk event status, output directory creation, and CLI operation without credentials.
+- Phase 6V does not change compare-strategies behavior, fixture-sweep behavior, broker/order execution behavior, existing risk-engine permissions, dry-run execution, Alpaca behavior, strategy wiring, or Hermes runtime wiring.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -160,10 +167,11 @@ Current allowed mode:
 - Phase 6S is only a future architecture plan; it does not change current trading permissions or risk limits.
 - Phase 6T adds inert shorting design models only; it does not change current trading permissions or risk limits.
 - Phase 6U adds local-only shorting simulation foundations only; it does not change current trading permissions or risk limits.
+- Phase 6V adds local-only shorting simulation report export only; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6U shorting dry-run simulator design, then consider later reporting or permission-gated simulation work only after explicit approval.
+Review Phase 6V shorting simulation report export, then consider later permission-gated simulation work only after explicit approval.
 
 ## Project manager rule
 

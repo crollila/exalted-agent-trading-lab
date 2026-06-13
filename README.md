@@ -64,6 +64,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Documentation-only advanced permissions plan for possible future shorting, margin, and options research.
 - Future-facing shorting design models for later research planning, not wired into execution.
 - Local-only shorting simulator foundation for future research, not wired into normal strategy execution.
+- Local-only shorting simulation Markdown report export for deterministic examples only.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -147,6 +148,8 @@ python -m src.main export-leaderboard
 python -m src.main export-leaderboard --output-dir data/experiments --report-path data/reports/strategy_leaderboard.md
 python -m src.main export-fixture-sweep-leaderboard
 python -m src.main export-fixture-sweep-leaderboard --output-dir data/experiments --report-path data/reports/fixture_sweep_leaderboard.md
+python -m src.main export-short-simulation-report
+python -m src.main export-short-simulation-report --report-path data/reports/shorting_simulation_report.md
 ```
 
 Create a human analysis note from the latest valid tournament artifact:
@@ -245,6 +248,8 @@ python -m src.main fixture-sweep --status active,promoted,retest
 Phase 6T adds inert shorting proposal and risk input models for future design work. They are not connected to strategies, risk execution, order execution, Alpaca, or Hermes runtime.
 
 Phase 6U adds a local-only shorting simulator foundation for deterministic research inputs. It is not connected to normal strategies, the existing risk engine, the order executor, Alpaca, or Hermes runtime.
+
+Phase 6V adds a local-only shorting simulation report export for deterministic examples. It writes an ignored Markdown report and does not enable executable shorting, broker calls, Alpaca calls, margin, options, strategy wiring, risk-engine permission changes, or Hermes runtime wiring.
 
 Current behavior remains stock-only, long-only, cash-only, no options, no margin, no shorting, no live trading, and no LLM direct execution.
 

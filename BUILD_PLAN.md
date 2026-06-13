@@ -745,19 +745,51 @@ Not included:
 - Live trading.
 - Hermes runtime wiring.
 
-### Future Phase 6V - Paper margin design
+### Phase 6V - Shorting simulation report export
+
+Status: complete for local-only short simulation report export.
+
+Goal: make the isolated shorting simulator reviewable through deterministic local Markdown reporting without enabling shorting in normal execution.
+
+Included:
+
+- Local-only report module at `src/reporting/shorting_simulation_report.py`.
+- Deterministic hardcoded `ShortProposal` example and deterministic local price tuple.
+- Markdown report export to ignored runtime path `data/reports/shorting_simulation_report.md` by default.
+- `export-short-simulation-report` CLI command with `--report-path` support.
+- Missing report directories are created automatically.
+- Report includes generated timestamp, simulation-only disclaimer, executable-shorting-disabled statement, proposal symbol/action/target short weight, entry price, cover price, gross exposure, net exposure, short exposure, realized/unrealized P/L, borrow fee estimate, forced-cover status, and risk event status.
+- CLI prints `simulation only` and does not require credentials.
+- Tests cover disclaimer wording, key short metrics, forced-cover/risk event status, output directory creation, CLI operation without credentials, unchanged comparison/sweep behavior, and existing executable risk-engine rejection of shorting.
+
+Not included:
+
+- Executable shorting.
+- Broker shorting calls.
+- Alpaca shorting calls.
+- Order executor changes.
+- Risk engine behavior changes.
+- Existing dry-run execution changes.
+- Real market data.
+- Strategy shorting integration.
+- Margin.
+- Options.
+- Live trading.
+- Hermes runtime wiring.
+
+### Future Phase 6W - Paper margin design
 
 Status: planned, not implemented.
 
 Goal: design explicit margin permission, exposure accounting, margin call simulation, daily loss limits, and forced deleveraging without enabling margin.
 
-### Future Phase 6W - Paper margin dry-run simulation
+### Future Phase 6X - Paper margin dry-run simulation
 
 Status: planned, not implemented.
 
 Goal: simulate margin exposure and forced deleveraging locally after design and tests, with no broker calls.
 
-### Future Phase 6X - Paper options design
+### Future Phase 6Y - Paper options design
 
 Status: planned, not implemented.
 
@@ -780,13 +812,13 @@ Required future controls:
 - No naked short options at first.
 - No live options.
 
-### Future Phase 6Y - Paper options dry-run simulation
+### Future Phase 6Z - Paper options dry-run simulation
 
 Status: planned, not implemented.
 
 Goal: simulate option proposals locally after design and tests, with no broker calls.
 
-### Future Phase 6Z - Advanced broker-paper implementation gate
+### Future Phase 7A - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 

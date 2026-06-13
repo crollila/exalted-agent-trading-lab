@@ -23,6 +23,10 @@ from src.reporting.research_decisions import (
     read_research_decision_ledger,
     record_research_decision,
 )
+from src.reporting.shorting_simulation_report import (
+    DEFAULT_SHORT_SIMULATION_REPORT_PATH,
+    export_shorting_simulation_report,
+)
 from src.reporting.strategy_status import (
     ALLOWED_STRATEGY_STATUSES,
     ALLOWED_STATUS_FILTER_VALUES,
@@ -282,6 +286,14 @@ def run_export_fixture_sweep_leaderboard(
     report_path: Path | str = Path("data/reports/fixture_sweep_leaderboard.md"),
 ) -> None:
     result = export_fixture_sweep_leaderboard(output_dir=output_dir, report_path=report_path)
+    print(result.message)
+
+
+def run_export_short_simulation_report(
+    report_path: Path | str = DEFAULT_SHORT_SIMULATION_REPORT_PATH,
+) -> None:
+    result = export_shorting_simulation_report(report_path=report_path)
+    print("simulation only")
     print(result.message)
 
 
@@ -559,6 +571,16 @@ def main() -> None:
         default=Path("data/reports/fixture_sweep_leaderboard.md"),
         help="Markdown report path. Defaults to data/reports/fixture_sweep_leaderboard.md.",
     )
+    short_simulation_report_parser = subparsers.add_parser(
+        "export-short-simulation-report",
+        help="Export a local-only deterministic shorting simulation report",
+    )
+    short_simulation_report_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=DEFAULT_SHORT_SIMULATION_REPORT_PATH,
+        help="Markdown report path. Defaults to data/reports/shorting_simulation_report.md.",
+    )
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -708,6 +730,8 @@ def main() -> None:
         run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     elif args.command == "export-fixture-sweep-leaderboard":
         run_export_fixture_sweep_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
+    elif args.command == "export-short-simulation-report":
+        run_export_short_simulation_report(report_path=args.report_path)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "create-sweep-analysis-note":
