@@ -453,6 +453,38 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6N - Fixture sweep leaderboard export
+
+Status: complete for local Markdown robustness leaderboard export.
+
+Included:
+
+- `export-fixture-sweep-leaderboard` CLI command reads saved `fixture-sweep --save` JSON artifacts.
+- `export-fixture-sweep-leaderboard --output-dir` selects the artifact directory, defaulting to `data/experiments`.
+- `export-fixture-sweep-leaderboard --report-path` selects the Markdown report path, defaulting to `data/reports/fixture_sweep_leaderboard.md`.
+- Missing report directories are created automatically.
+- No report is written when no valid fixture sweep artifacts exist.
+- Malformed or incomplete fixture sweep artifacts are skipped and reported when valid artifacts also exist.
+- The Markdown report includes title, generated timestamp, source artifact directory, current robust champion summary, fixture list, score formula/explanation, safety disclaimer, per-fixture winner table, strategy robustness aggregate table, caveats, most recent sweep artifact path, and skipped/malformed artifact count.
+- Strategy robustness aggregates combine saved sweeps by fixture appearances, fixture wins, win rate, weighted average score, weighted average excess return, and worst max drawdown.
+- Tests use temporary fixture files and do not depend on real `data/experiments` or `data/reports`.
+- Tests cover one artifact, multiple artifacts, champion summary, per-fixture winner table, strategy robustness aggregate table, score explanation, safety disclaimer, caveats, output directory creation, no-artifact behavior, malformed-artifact skip behavior, CLI output, and no external service or credential requirement.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

@@ -13,6 +13,7 @@ from src.reporting.fixture_sweep import (
     save_fixture_sweep_artifacts,
     summarize_fixture_sweep,
 )
+from src.reporting.fixture_sweep_leaderboard_export import export_fixture_sweep_leaderboard
 from src.reporting.leaderboard_export import export_strategy_leaderboard
 from src.reporting.report_generator import format_report, generate_daily_report
 from src.reporting.research_decisions import (
@@ -209,6 +210,14 @@ def run_export_leaderboard(
     print(result.message)
 
 
+def run_export_fixture_sweep_leaderboard(
+    output_dir: Path | str = Path("data/experiments"),
+    report_path: Path | str = Path("data/reports/fixture_sweep_leaderboard.md"),
+) -> None:
+    result = export_fixture_sweep_leaderboard(output_dir=output_dir, report_path=report_path)
+    print(result.message)
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -373,6 +382,22 @@ def main() -> None:
         default=Path("data/reports/strategy_leaderboard.md"),
         help="Markdown report path. Defaults to data/reports/strategy_leaderboard.md.",
     )
+    fixture_sweep_leaderboard_parser = subparsers.add_parser(
+        "export-fixture-sweep-leaderboard",
+        help="Export a Markdown fixture sweep robustness leaderboard",
+    )
+    fixture_sweep_leaderboard_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory containing saved fixture sweep JSON artifacts. Defaults to data/experiments.",
+    )
+    fixture_sweep_leaderboard_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=Path("data/reports/fixture_sweep_leaderboard.md"),
+        help="Markdown report path. Defaults to data/reports/fixture_sweep_leaderboard.md.",
+    )
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -459,6 +484,8 @@ def main() -> None:
         run_tournament_champion(output_dir=args.output_dir)
     elif args.command == "export-leaderboard":
         run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
+    elif args.command == "export-fixture-sweep-leaderboard":
+        run_export_fixture_sweep_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "record-research-decision":

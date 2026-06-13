@@ -58,6 +58,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Strategy tournament analysis note templates for repeatable human post-run review.
 - Research decision ledger for recording promote/modify/retest/retire/no-decision outcomes.
 - Fixture sweep tournament for cross-regime robustness summaries.
+- Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
 ## Beginner command workflow
 
@@ -132,6 +133,8 @@ Export the Markdown leaderboard:
 ```bash
 python -m src.main export-leaderboard
 python -m src.main export-leaderboard --output-dir data/experiments --report-path data/reports/strategy_leaderboard.md
+python -m src.main export-fixture-sweep-leaderboard
+python -m src.main export-fixture-sweep-leaderboard --output-dir data/experiments --report-path data/reports/fixture_sweep_leaderboard.md
 ```
 
 Create a human analysis note from the latest valid tournament artifact:
@@ -196,7 +199,7 @@ Use `--save` to write durable local research artifacts under `data/experiments` 
 
 Use `tournament-history` to review saved comparison JSON artifacts over time. Use `tournament-champion` to summarize the current champion strategy across saved ranked tournament artifacts. Use `export-leaderboard` to generate a clean Markdown strategy leaderboard report at `data/reports/strategy_leaderboard.md` by default. Use `create-analysis-note` to turn the latest valid ranked tournament artifact into a Markdown review template under `data/notes` by default. Existing notes are not overwritten unless `--force` is passed. Use `record-research-decision` and `research-decisions` to maintain an ignored local Markdown decision ledger at `data/notes/research_decisions.md`.
 
-Use `fixture-sweep` to run the same local strategy set across all deterministic non-flat fixtures and summarize fixture winners, aggregate wins, average score, average excess return, worst drawdown, and an overall robust champion. Sweep artifacts are ignored runtime outputs under `data/experiments` when `--save` is passed.
+Use `fixture-sweep` to run the same local strategy set across all deterministic non-flat fixtures and summarize fixture winners, aggregate wins, average score, average excess return, worst drawdown, and an overall robust champion. Sweep artifacts are ignored runtime outputs under `data/experiments` when `--save` is passed. Use `export-fixture-sweep-leaderboard` to generate a clean Markdown robustness report at `data/reports/fixture_sweep_leaderboard.md` by default.
 
 ## Portfolio note
 
