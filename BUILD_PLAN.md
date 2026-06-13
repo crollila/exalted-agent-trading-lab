@@ -628,6 +628,115 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6S - Advanced permissions architecture plan
+
+Status: complete for documentation-only future permissions planning.
+
+Included:
+
+- Dedicated advanced permissions architecture plan at `docs/advanced_permissions_plan.md`.
+- Staged future permission roadmap: paper shorting design, paper shorting dry-run simulation, paper margin design, paper margin dry-run simulation, paper options design, paper options dry-run simulation, broker-paper implementation only after simulator/risk tests, and live trading remaining out of scope until long-term validation.
+- Future deterministic permission model covering environment, asset classes, trade directions, leverage, order authority, strategy allowlists, and account allowlists.
+- Gate order for future advanced features: model proposals, expand logging, add fail-closed deterministic risk checks, simulate locally, add paper-only abstractions, then consider paper execution only after review.
+- Future paper-shorting design notes for explicit strategy and CLI/user permission flags, max short exposure, max gross exposure, max net exposure, max loss per short position, forced-cover behavior, borrow availability assumption logging, hard permission bans, and no live shorting.
+- Future margin design notes for explicit permission levels, max gross exposure, max net exposure, max daily loss, margin call simulation, forced deleveraging, no live margin, and no silent margin implied by buying power.
+- Future options design notes for explicit option contract models, underlying symbol, call/put, expiration, strike, contracts, premium, max premium at risk, max contracts, Greeks when available, liquidity/open-interest assumptions, assignment/exercise risk notes, no 0DTE at first, no naked short options at first, and no live options.
+- Future reporting requirements so saved artifacts can identify stock-only, short-enabled, margin-enabled, options-enabled, simulated, paper, or shadow-live conditions.
+- Future testing requirements for disabled-permission rejection, fail-closed defaults, paper-only boundaries, broker wrapper rejection, Hermes parser boundaries, and no external-service requirements.
+- Documentation note that future phases changing permissions must update `STATUS.md`, `BUILD_PLAN.md`, `README.md`, and `docs/risk_policy.md`.
+- Future Codex prompt added at `docs/codex_prompts/phase_6t_shorting_design_models.md` for shorting proposal/risk model design without enabling execution.
+
+Not included:
+
+- Trading permission changes.
+- Risk policy changes.
+- Risk limit changes.
+- Proposal model changes.
+- Risk engine changes.
+- Execution changes.
+- Broker/order submission changes.
+- Alpaca shorting, margin, or options calls.
+- Hermes runtime wiring.
+- Live trading.
+- Paper shorting.
+- Paper margin.
+- Paper options.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
+### Future Phase 6T - Paper shorting design
+
+Status: planned, not implemented.
+
+Goal: design shorting proposal and risk models without enabling short execution.
+
+Required future controls:
+
+- Explicit strategy permission flag.
+- Explicit CLI/user permission flag.
+- Max short exposure.
+- Max gross exposure.
+- Max net exposure.
+- Max loss per short position.
+- Forced-cover rule.
+- Borrow availability assumption logging.
+- Hard ban on shorting without a specific permission level.
+- No live shorting.
+
+### Future Phase 6U - Paper shorting dry-run simulation
+
+Status: planned, not implemented.
+
+Goal: simulate short proposals and forced-cover behavior locally after design and tests, with no broker calls.
+
+### Future Phase 6V - Paper margin design
+
+Status: planned, not implemented.
+
+Goal: design explicit margin permission, exposure accounting, margin call simulation, daily loss limits, and forced deleveraging without enabling margin.
+
+### Future Phase 6W - Paper margin dry-run simulation
+
+Status: planned, not implemented.
+
+Goal: simulate margin exposure and forced deleveraging locally after design and tests, with no broker calls.
+
+### Future Phase 6X - Paper options design
+
+Status: planned, not implemented.
+
+Goal: design explicit option contract models and risk controls without enabling options.
+
+Required future controls:
+
+- Underlying symbol.
+- Call or put.
+- Expiration.
+- Strike.
+- Quantity/contracts.
+- Premium.
+- Max premium at risk.
+- Max contracts.
+- Greeks fields if available.
+- Liquidity/open-interest assumptions.
+- Assignment/exercise risk notes.
+- No 0DTE at first.
+- No naked short options at first.
+- No live options.
+
+### Future Phase 6Y - Paper options dry-run simulation
+
+Status: planned, not implemented.
+
+Goal: simulate option proposals locally after design and tests, with no broker calls.
+
+### Future Phase 6Z - Advanced broker-paper implementation gate
+
+Status: planned, not implemented.
+
+Goal: consider paper broker implementation only after simulator and risk tests pass, docs are updated, and the user explicitly approves a later phase.
+
 Strategies:
 
 - SPY buy-and-hold

@@ -61,6 +61,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Strategy status registry for marking strategies active, promoted, retest, modified, or retired.
 - Status-aware research reports that annotate strategy status without changing which strategies run.
 - Opt-in status-aware filtering for local comparison and fixture sweep research commands.
+- Documentation-only advanced permissions plan for possible future shorting, margin, and options research.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -235,6 +236,12 @@ python -m src.main fixture-sweep --status active,promoted,retest
 
 `--exclude-retired` excludes only strategies whose latest local status is exactly `retired`. `--status` accepts a comma-separated list from `active`, `promoted`, `retest`, `modified`, `retired`, and `unknown`. `unknown` means the strategy has no local status entry or the registry is missing. If filtering is used with `--save`, the saved JSON, CSV, and Markdown artifacts include filter metadata.
 
+## Advanced permissions roadmap
+
+`docs/advanced_permissions_plan.md` documents a future staged permission architecture for possible shorting, margin, and options research. It is a plan only. It does not enable shorting, margin, options, live trading, Hermes runtime execution, or any new broker behavior.
+
+Current behavior remains stock-only, long-only, cash-only, no options, no margin, no shorting, no live trading, and no LLM direct execution.
+
 ## Portfolio note
 
 This repo is designed to show practical engineering judgment around Python, SQLite, testing, CLI design, deterministic risk controls, paper-trading safety, reporting and analytics, and AI-agent safety boundaries. The interesting part is not a claim that the strategy wins. The interesting part is that every proposal is constrained, logged, reportable, testable, and separated from live-money permissions.
@@ -244,5 +251,6 @@ This repo is designed to show practical engineering judgment around Python, SQLi
 - `STATUS.md` records the current implementation state.
 - `BUILD_PLAN.md` records phased scope.
 - `docs/risk_policy.md` records current trading permissions and hard limits.
+- `docs/advanced_permissions_plan.md` records a non-enabling roadmap for possible future advanced permissions.
 - `docs/hermes_setup.md` records the disabled Hermes runtime posture and parser-only fixture behavior.
 - `docs/codex_workflow.md` records the ChatGPT/Codex workflow.

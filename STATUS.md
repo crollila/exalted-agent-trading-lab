@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6R status-aware filtering controls completed.
+Phase 6S advanced permissions architecture plan completed.
 
 Included:
 
@@ -99,6 +99,17 @@ Included:
 - Status filters that match no selected strategies print a clear skip message instead of running a tournament.
 - Saved comparison artifacts include status-filter metadata when saved through the CLI.
 - Saved fixture sweep artifacts include status-filter metadata when saved through the CLI.
+- Advanced permissions architecture plan for future shorting, margin, and options work.
+- `docs/advanced_permissions_plan.md` documents a future staged permission roadmap without enabling any new behavior.
+- Future stages are documented for paper shorting design, paper shorting dry-run simulation, paper margin design, paper margin dry-run simulation, paper options design, paper options dry-run simulation, broker-paper implementation only after simulator/risk tests, and live trading remaining out of scope until long-term validation.
+- Future advanced permission gates are documented for proposal modeling, logging, deterministic risk rejection, simulation-only fixtures, paper-only wrappers, shadow-live observation, and later explicit live review.
+- Future shorting plan covers explicit strategy and CLI/user permission flags, max short exposure, max gross exposure, max net exposure, max loss per short position, forced-cover rules, borrow availability assumption logging, hard permission bans, and no live shorting.
+- Future margin plan covers explicit permission levels, max gross exposure, max net exposure, max daily loss, margin call simulation, forced deleveraging, no live margin, and no silent margin implied by buying power.
+- Future options plan covers explicit contract models, underlying symbol, call/put, expiration, strike, contracts, premium, max premium at risk, max contracts, Greeks when available, liquidity/open-interest assumptions, assignment/exercise risk notes, no 0DTE at first, no naked short options at first, and no live options.
+- Advanced permission reporting requirements are documented so future artifacts can identify stock-only, short-enabled, margin-enabled, options-enabled, simulation, paper, or shadow-live conditions.
+- Advanced permission testing requirements are documented, including fail-closed defaults and no external service or credential requirements.
+- Phase 6S is documentation-only and does not add proposal fields, risk behavior, execution behavior, broker behavior, Alpaca advanced calls, Hermes runtime wiring, or advanced trading paths.
+- Future Codex prompt `docs/codex_prompts/phase_6t_shorting_design_models.md` was added for shorting proposal/risk model design without enabling execution.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -130,10 +141,11 @@ Current allowed mode:
 - Hermes fixture strategies are local parser-only dry-run proposal generators.
 - Hermes parser tests require no network, credentials, Ollama, LM Studio, hosted LLM, or real market data.
 - Local strategy comparison and saved artifacts are dry-run only and do not call Alpaca, Hermes, external LLMs, market data APIs, or network services.
+- Phase 6S is only a future architecture plan; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6R status-aware filtering controls, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6S advanced permissions architecture plan, then choose the next non-enabling research phase or explicit Hermes runtime prompting plan when ready.
 
 ## Project manager rule
 
