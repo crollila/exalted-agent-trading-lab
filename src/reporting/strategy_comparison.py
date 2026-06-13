@@ -24,6 +24,13 @@ REQUIRED_COMPARISON_FIELDS = (
     "score_explanation",
 )
 ARTIFACT_COLUMNS = ("experiment_timestamp", "fixture_name", *REQUIRED_COMPARISON_FIELDS)
+FILTER_ARTIFACT_COLUMNS = (
+    *ARTIFACT_COLUMNS,
+    "status_filter_applied",
+    "status_filter_exclude_retired",
+    "status_filter_included_statuses",
+    "status_filter_excluded_strategies",
+)
 REJECTED_TRADE_SCORE_PENALTY = 0.01
 SCORE_FORMULA = "score = excess_return - abs(max_drawdown) - (rejected_trade_count * 0.01)"
 SCORE_EXPLANATION = (
@@ -93,6 +100,7 @@ def save_strategy_comparison_artifacts(
     fixture_name: str,
     output_dir: Path | str,
     experiment_timestamp: datetime | None = None,
+    status_filter_metadata: dict | None = None,
 ) -> ComparisonArtifactPaths:
     timestamp = experiment_timestamp or datetime.now(timezone.utc)
     timestamp_text = timestamp.astimezone(timezone.utc).isoformat()
@@ -101,30 +109,45 @@ def save_strategy_comparison_artifacts(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     ranked_reports = rank_strategy_reports(reports)
+    active_filter_metadata = _normalize_filter_metadata(status_filter_metadata)
+    include_filter_metadata = status_filter_metadata is not None
 
-    rows = [
-        {
+    rows = []
+    for report in ranked_reports:
+        row = {
             "experiment_timestamp": timestamp_text,
             "fixture_name": fixture_name,
             **{field: report[field] for field in REQUIRED_COMPARISON_FIELDS},
         }
-        for report in ranked_reports
-    ]
+        if include_filter_metadata:
+            row.update(
+                {
+                    "status_filter_applied": active_filter_metadata["applied"],
+                    "status_filter_exclude_retired": active_filter_metadata["exclude_retired"],
+                    "status_filter_included_statuses": ", ".join(active_filter_metadata["included_statuses"]),
+                    "status_filter_excluded_strategies": _excluded_strategy_text(active_filter_metadata),
+                }
+            )
+        rows.append(row)
 
     base_name = f"strategy_comparison_{safe_fixture_name}_{filename_timestamp}"
     json_path = output_path / f"{base_name}.json"
     csv_path = output_path / f"{base_name}.csv"
     markdown_path = output_path / f"{base_name}.md"
 
+    payload = {
+        "experiment_timestamp": timestamp_text,
+        "fixture_name": fixture_name,
+        "score_formula": SCORE_FORMULA,
+        "score_explanation": SCORE_EXPLANATION,
+        "results": rows,
+    }
+    if include_filter_metadata:
+        payload["status_filter"] = active_filter_metadata
+
     json_path.write_text(
         json.dumps(
-            {
-                "experiment_timestamp": timestamp_text,
-                "fixture_name": fixture_name,
-                "score_formula": SCORE_FORMULA,
-                "score_explanation": SCORE_EXPLANATION,
-                "results": rows,
-            },
+            payload,
             indent=2,
             sort_keys=True,
         )
@@ -133,10 +156,14 @@ def save_strategy_comparison_artifacts(
     )
 
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=ARTIFACT_COLUMNS)
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=FILTER_ARTIFACT_COLUMNS if include_filter_metadata else ARTIFACT_COLUMNS,
+        )
         writer.writeheader()
         writer.writerows(rows)
 
+    filter_markdown = _filter_markdown_lines(active_filter_metadata) if include_filter_metadata else []
     markdown_path.write_text(
         "\n".join(
             [
@@ -146,6 +173,7 @@ def save_strategy_comparison_artifacts(
                 f"- Fixture: {fixture_name}",
                 f"- Score formula: `{SCORE_FORMULA}`",
                 f"- Score explanation: {SCORE_EXPLANATION}",
+                *filter_markdown,
                 "",
                 "```text",
                 format_strategy_comparison(ranked_reports),
@@ -204,6 +232,42 @@ def _format_row(values: tuple[str, ...], widths: list[int]) -> str:
 
 def _safe_filename_part(value: str) -> str:
     return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in value)
+
+
+def _normalize_filter_metadata(status_filter_metadata: dict | None) -> dict:
+    if status_filter_metadata is None:
+        return {
+            "applied": False,
+            "exclude_retired": False,
+            "included_statuses": [],
+            "excluded_strategies": [],
+        }
+    return {
+        "applied": bool(status_filter_metadata.get("applied")),
+        "exclude_retired": bool(status_filter_metadata.get("exclude_retired")),
+        "included_statuses": list(status_filter_metadata.get("included_statuses") or []),
+        "excluded_strategies": list(status_filter_metadata.get("excluded_strategies") or []),
+    }
+
+
+def _excluded_strategy_text(status_filter_metadata: dict) -> str:
+    excluded = status_filter_metadata["excluded_strategies"]
+    return ", ".join(
+        f"{row['strategy_id']} ({row['status']})"
+        for row in excluded
+    )
+
+
+def _filter_markdown_lines(status_filter_metadata: dict) -> list[str]:
+    lines = [
+        f"- Status filter applied: {'yes' if status_filter_metadata['applied'] else 'no'}",
+        f"- Exclude retired: {'yes' if status_filter_metadata['exclude_retired'] else 'no'}",
+    ]
+    if status_filter_metadata["included_statuses"]:
+        lines.append(f"- Included statuses: {', '.join(status_filter_metadata['included_statuses'])}")
+    if status_filter_metadata["excluded_strategies"]:
+        lines.append(f"- Excluded strategies: {_excluded_strategy_text(status_filter_metadata)}")
+    return lines
 
 
 def _money(value: float) -> str:

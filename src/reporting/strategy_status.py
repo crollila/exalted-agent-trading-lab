@@ -8,6 +8,7 @@ from pathlib import Path
 ALLOWED_STRATEGY_STATUSES = ("active", "promoted", "retest", "modified", "retired")
 DEFAULT_STRATEGY_STATUS_PATH = Path("data/notes/strategy_status.md")
 DEFAULT_UNKNOWN_STRATEGY_STATUS = "unknown"
+ALLOWED_STATUS_FILTER_VALUES = (*ALLOWED_STRATEGY_STATUSES, DEFAULT_UNKNOWN_STRATEGY_STATUS)
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,29 @@ class StrategyStatusEntry:
     reason: str
     source_note: str | None
     next_action: str | None
+
+
+@dataclass(frozen=True)
+class ExcludedStrategyStatus:
+    strategy_id: str
+    status: str
+
+
+@dataclass(frozen=True)
+class StrategyStatusFilter:
+    exclude_retired: bool = False
+    included_statuses: tuple[str, ...] = ()
+
+    @property
+    def applied(self) -> bool:
+        return self.exclude_retired or bool(self.included_statuses)
+
+
+@dataclass(frozen=True)
+class StrategyStatusFilterResult:
+    selected_strategy_ids: tuple[str, ...]
+    excluded_strategies: tuple[ExcludedStrategyStatus, ...]
+    filter: StrategyStatusFilter
 
 
 def set_strategy_status(
@@ -114,6 +138,100 @@ def load_latest_strategy_statuses(
 
 def strategy_status_for(strategy_id: str, statuses: dict[str, str] | None) -> str:
     return (statuses or {}).get(strategy_id, DEFAULT_UNKNOWN_STRATEGY_STATUS)
+
+
+def parse_status_filter_values(status_values: str | None) -> tuple[str, ...]:
+    if status_values is None:
+        return ()
+
+    parsed = tuple(value.strip() for value in status_values.split(",") if value.strip())
+    if not parsed:
+        raise ValueError("--status requires at least one status value")
+
+    invalid_values = [value for value in parsed if value not in ALLOWED_STATUS_FILTER_VALUES]
+    if invalid_values:
+        raise ValueError(
+            "--status values must be one of: "
+            f"{', '.join(ALLOWED_STATUS_FILTER_VALUES)}. "
+            f"Invalid: {', '.join(invalid_values)}"
+        )
+
+    deduplicated: list[str] = []
+    for value in parsed:
+        if value not in deduplicated:
+            deduplicated.append(value)
+    return tuple(deduplicated)
+
+
+def filter_strategy_ids_by_status(
+    strategy_ids: tuple[str, ...],
+    statuses: dict[str, str] | None,
+    status_filter: StrategyStatusFilter,
+) -> StrategyStatusFilterResult:
+    selected: list[str] = []
+    excluded: list[ExcludedStrategyStatus] = []
+
+    for strategy_id in strategy_ids:
+        status = strategy_status_for(strategy_id, statuses)
+        should_exclude = (
+            (status_filter.exclude_retired and status == "retired")
+            or (bool(status_filter.included_statuses) and status not in status_filter.included_statuses)
+        )
+        if should_exclude:
+            excluded.append(ExcludedStrategyStatus(strategy_id=strategy_id, status=status))
+        else:
+            selected.append(strategy_id)
+
+    return StrategyStatusFilterResult(
+        selected_strategy_ids=tuple(selected),
+        excluded_strategies=tuple(excluded),
+        filter=status_filter,
+    )
+
+
+def status_filter_to_metadata(result: StrategyStatusFilterResult | None) -> dict:
+    if result is None:
+        return {
+            "applied": False,
+            "exclude_retired": False,
+            "included_statuses": [],
+            "excluded_strategies": [],
+        }
+
+    return {
+        "applied": result.filter.applied,
+        "exclude_retired": result.filter.exclude_retired,
+        "included_statuses": list(result.filter.included_statuses),
+        "excluded_strategies": [
+            {
+                "strategy_id": excluded.strategy_id,
+                "status": excluded.status,
+            }
+            for excluded in result.excluded_strategies
+        ],
+    }
+
+
+def format_status_filter_summary(result: StrategyStatusFilterResult) -> str:
+    if not result.filter.applied:
+        return "Status filter: none applied."
+
+    lines = ["Status filter applied:"]
+    if result.filter.exclude_retired:
+        lines.append("- Retired strategies excluded.")
+    if result.filter.included_statuses:
+        lines.append(f"- Included statuses: {', '.join(result.filter.included_statuses)}")
+
+    if result.excluded_strategies:
+        lines.append("- Excluded strategies:")
+        lines.extend(
+            f"  - {excluded.strategy_id} ({excluded.status})"
+            for excluded in result.excluded_strategies
+        )
+    else:
+        lines.append("- Excluded strategies: none.")
+
+    return "\n".join(lines)
 
 
 def format_strategy_status_entry(

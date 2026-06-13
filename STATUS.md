@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6Q status-aware research reports completed.
+Phase 6R status-aware filtering controls completed.
 
 Included:
 
@@ -85,7 +85,20 @@ Included:
 - `tournament-champion` terminal output includes the current champion strategy status.
 - `export-leaderboard` Markdown reports include champion status and strategy status in aggregate tables.
 - `export-fixture-sweep-leaderboard` Markdown reports include robust champion status and strategy status in aggregate tables.
-- Strategy status annotations do not filter, exclude, or change which strategies run.
+- Strategy status annotations alone do not filter, exclude, or change which strategies run.
+- Opt-in status-aware filtering controls for local research selection.
+- `compare-strategies --exclude-retired` excludes only strategies whose latest local research status is exactly `retired`.
+- `fixture-sweep --exclude-retired` excludes only strategies whose latest local research status is exactly `retired`.
+- `compare-strategies --status active,promoted,retest` includes only strategies whose latest status is in the requested comma-separated list.
+- `fixture-sweep --status active,promoted,retest` includes only strategies whose latest status is in the requested comma-separated list.
+- `unknown` is supported as an explicit `--status` filter value for strategies with no local status entry or when the status registry is missing.
+- Missing status registries do not crash status filtering.
+- Default comparison and fixture sweep behavior remains unchanged, including retired strategies unless filtering is explicitly requested.
+- Status filtering applies only to local research comparison and fixture sweep strategy selection.
+- Status filtering prints beginner-readable explanations with included statuses and excluded strategy IDs plus latest statuses.
+- Status filters that match no selected strategies print a clear skip message instead of running a tournament.
+- Saved comparison artifacts include status-filter metadata when saved through the CLI.
+- Saved fixture sweep artifacts include status-filter metadata when saved through the CLI.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -97,6 +110,7 @@ Included:
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
 - Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, status-aware reports, analysis notes, fixture sweep analysis notes, research decisions, strategy status registry, and performance.
+- Expanded tests for opt-in status-aware comparison and fixture sweep filtering, unknown status behavior, filter output, and saved filter metadata.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -119,7 +133,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6Q status-aware research reports, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6R status-aware filtering controls, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

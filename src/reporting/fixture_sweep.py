@@ -101,12 +101,15 @@ def summarize_fixture_sweep(ranked_results_by_fixture: dict[str, list[dict]]) ->
 def format_fixture_sweep(
     summary: FixtureSweepSummary,
     status_by_strategy: dict[str, str] | None = None,
+    status_filter_metadata: dict | None = None,
 ) -> str:
+    active_filter_metadata = _normalize_filter_metadata(status_filter_metadata)
     lines = [
         "Fixture Sweep Tournament",
         f"Score formula: {summary.score_formula}",
         f"Score explanation: {summary.score_explanation}",
         "Safety disclaimer: local deterministic research only; not live trading; no broker/order behavior changed.",
+        *_filter_text_lines(active_filter_metadata),
         "",
         "Per-fixture winners",
         _text_table(
@@ -156,12 +159,14 @@ def save_fixture_sweep_artifacts(
     output_dir: Path | str,
     generated_at: datetime | None = None,
     status_by_strategy: dict[str, str] | None = None,
+    status_filter_metadata: dict | None = None,
 ) -> FixtureSweepArtifactPaths:
     timestamp = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     timestamp_text = timestamp.isoformat()
     filename_timestamp = timestamp.strftime("%Y%m%dT%H%M%S%fZ")
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    active_filter_metadata = _normalize_filter_metadata(status_filter_metadata)
 
     base_name = f"fixture_sweep_{filename_timestamp}"
     json_path = output_path / f"{base_name}.json"
@@ -175,6 +180,7 @@ def save_fixture_sweep_artifacts(
                 "fixtures_included": list(summary.fixtures_included),
                 "score_formula": summary.score_formula,
                 "score_explanation": summary.score_explanation,
+                "status_filter": active_filter_metadata,
                 "overall_champion": _aggregate_to_dict(summary.overall_champion),
                 "strategy_statuses": {
                     aggregate.strategy_id: strategy_status_for(aggregate.strategy_id, status_by_strategy)
@@ -214,6 +220,10 @@ def save_fixture_sweep_artifacts(
             "average_score",
             "average_excess_return",
             "worst_max_drawdown",
+            "status_filter_applied",
+            "status_filter_exclude_retired",
+            "status_filter_included_statuses",
+            "status_filter_excluded_strategies",
         )
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -227,6 +237,7 @@ def save_fixture_sweep_artifacts(
                     "strategy_id": winner.strategy_id,
                     "status": strategy_status_for(winner.strategy_id, status_by_strategy),
                     "score": winner.score,
+                    **_filter_csv_values(active_filter_metadata),
                 }
             )
         for aggregate in summary.strategy_aggregates:
@@ -237,9 +248,11 @@ def save_fixture_sweep_artifacts(
                     "overall_champion": summary.overall_champion.strategy_id,
                     "status": strategy_status_for(aggregate.strategy_id, status_by_strategy),
                     **_aggregate_to_dict(aggregate),
+                    **_filter_csv_values(active_filter_metadata),
                 }
             )
 
+    filter_markdown = _filter_markdown_lines(active_filter_metadata)
     markdown_path.write_text(
         "\n".join(
             [
@@ -250,6 +263,7 @@ def save_fixture_sweep_artifacts(
                 f"- Overall robust champion: `{summary.overall_champion.strategy_id}`",
                 f"- Score formula: `{summary.score_formula}`",
                 f"- Score explanation: {summary.score_explanation}",
+                *filter_markdown,
                 "",
                 "## Safety Disclaimer",
                 "",
@@ -331,6 +345,66 @@ def _aggregate_to_dict(aggregate: StrategyRobustness) -> dict:
         "average_score": aggregate.average_score,
         "average_excess_return": aggregate.average_excess_return,
         "worst_max_drawdown": aggregate.worst_max_drawdown,
+    }
+
+
+def _normalize_filter_metadata(status_filter_metadata: dict | None) -> dict:
+    if status_filter_metadata is None:
+        return {
+            "applied": False,
+            "exclude_retired": False,
+            "included_statuses": [],
+            "excluded_strategies": [],
+        }
+    return {
+        "applied": bool(status_filter_metadata.get("applied")),
+        "exclude_retired": bool(status_filter_metadata.get("exclude_retired")),
+        "included_statuses": list(status_filter_metadata.get("included_statuses") or []),
+        "excluded_strategies": list(status_filter_metadata.get("excluded_strategies") or []),
+    }
+
+
+def _excluded_strategy_text(status_filter_metadata: dict) -> str:
+    return ", ".join(
+        f"{row['strategy_id']} ({row['status']})"
+        for row in status_filter_metadata["excluded_strategies"]
+    )
+
+
+def _filter_text_lines(status_filter_metadata: dict) -> list[str]:
+    if not status_filter_metadata["applied"]:
+        return []
+
+    lines = ["Status filter applied."]
+    if status_filter_metadata["exclude_retired"]:
+        lines.append("Retired strategies were excluded.")
+    if status_filter_metadata["included_statuses"]:
+        lines.append(f"Included statuses: {', '.join(status_filter_metadata['included_statuses'])}")
+    if status_filter_metadata["excluded_strategies"]:
+        lines.append(f"Excluded strategies: {_excluded_strategy_text(status_filter_metadata)}")
+    else:
+        lines.append("Excluded strategies: none.")
+    return lines
+
+
+def _filter_markdown_lines(status_filter_metadata: dict) -> list[str]:
+    lines = [
+        f"- Status filter applied: {'yes' if status_filter_metadata['applied'] else 'no'}",
+        f"- Exclude retired: {'yes' if status_filter_metadata['exclude_retired'] else 'no'}",
+    ]
+    if status_filter_metadata["included_statuses"]:
+        lines.append(f"- Included statuses: {', '.join(status_filter_metadata['included_statuses'])}")
+    if status_filter_metadata["excluded_strategies"]:
+        lines.append(f"- Excluded strategies: {_excluded_strategy_text(status_filter_metadata)}")
+    return lines
+
+
+def _filter_csv_values(status_filter_metadata: dict) -> dict:
+    return {
+        "status_filter_applied": status_filter_metadata["applied"],
+        "status_filter_exclude_retired": status_filter_metadata["exclude_retired"],
+        "status_filter_included_statuses": ", ".join(status_filter_metadata["included_statuses"]),
+        "status_filter_excluded_strategies": _excluded_strategy_text(status_filter_metadata),
     }
 
 

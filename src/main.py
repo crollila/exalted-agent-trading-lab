@@ -25,10 +25,16 @@ from src.reporting.research_decisions import (
 )
 from src.reporting.strategy_status import (
     ALLOWED_STRATEGY_STATUSES,
+    ALLOWED_STATUS_FILTER_VALUES,
     DEFAULT_STRATEGY_STATUS_PATH,
+    StrategyStatusFilter,
+    filter_strategy_ids_by_status,
+    format_status_filter_summary,
     load_latest_strategy_statuses,
+    parse_status_filter_values,
     read_strategy_status_registry,
     set_strategy_status,
+    status_filter_to_metadata,
 )
 from src.reporting.strategy_comparison import (
     format_strategy_comparison,
@@ -133,6 +139,9 @@ def run_compare_strategies(
     save: bool = False,
     output_dir: Path | str = Path("data/experiments"),
     include_hermes_fixtures: bool = False,
+    exclude_retired: bool = False,
+    status_values: str | None = None,
+    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
 ) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
@@ -140,6 +149,19 @@ def run_compare_strategies(
         strategy_names=strategy_names,
         include_hermes_fixtures=include_hermes_fixtures,
     )
+    filter_result = _apply_status_filter(
+        selected_strategy_names,
+        exclude_retired=exclude_retired,
+        status_values=status_values,
+        status_registry_path=status_registry_path,
+    )
+    selected_strategy_names = filter_result.selected_strategy_ids
+    if filter_result.filter.applied:
+        print(format_status_filter_summary(filter_result))
+        print("")
+    if not selected_strategy_names:
+        print("Comparison skipped: status filtering excluded every selected strategy.")
+        return
 
     reports: list[dict] = []
     for strategy_name in selected_strategy_names:
@@ -157,6 +179,7 @@ def run_compare_strategies(
             reports=reports,
             fixture_name=fixture,
             output_dir=output_dir,
+            status_filter_metadata=status_filter_to_metadata(filter_result),
         )
         print("Saved comparison artifacts:")
         print(f"JSON: {artifacts.json_path}")
@@ -169,6 +192,9 @@ def run_fixture_sweep(
     include_hermes_fixtures: bool = False,
     save: bool = False,
     output_dir: Path | str = Path("data/experiments"),
+    exclude_retired: bool = False,
+    status_values: str | None = None,
+    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
 ) -> None:
     settings = Settings.from_env()
     initialize_database(settings.database_path)
@@ -176,6 +202,19 @@ def run_fixture_sweep(
         strategy_names=strategy_names,
         include_hermes_fixtures=include_hermes_fixtures,
     )
+    filter_result = _apply_status_filter(
+        selected_strategy_names,
+        exclude_retired=exclude_retired,
+        status_values=status_values,
+        status_registry_path=status_registry_path,
+    )
+    selected_strategy_names = filter_result.selected_strategy_ids
+    if not selected_strategy_names:
+        if filter_result.filter.applied:
+            print(format_status_filter_summary(filter_result))
+            print("")
+        print("Fixture sweep skipped: status filtering excluded every selected strategy.")
+        return
 
     ranked_results_by_fixture: dict[str, list[dict]] = {}
     for fixture in FIXTURE_SWEEP_FIXTURES:
@@ -191,13 +230,22 @@ def run_fixture_sweep(
         ranked_results_by_fixture[fixture] = rank_strategy_reports(reports)
 
     summary = summarize_fixture_sweep(ranked_results_by_fixture)
-    status_by_strategy = load_latest_strategy_statuses()
-    print(format_fixture_sweep(summary, status_by_strategy=status_by_strategy))
+    status_by_strategy = load_latest_strategy_statuses(status_registry_path)
+    if filter_result.filter.applied:
+        print(format_status_filter_summary(filter_result))
+        print("")
+    print(
+        format_fixture_sweep(
+            summary,
+            status_by_strategy=status_by_strategy,
+        )
+    )
     if save:
         artifacts = save_fixture_sweep_artifacts(
             summary=summary,
             output_dir=output_dir,
             status_by_strategy=status_by_strategy,
+            status_filter_metadata=status_filter_to_metadata(filter_result),
         )
         print("Saved fixture sweep artifacts:")
         print(f"JSON: {artifacts.json_path}")
@@ -327,6 +375,26 @@ def _comparison_strategy_names(
     return tuple(selected)
 
 
+def _apply_status_filter(
+    strategy_names: tuple[str, ...],
+    exclude_retired: bool,
+    status_values: str | None,
+    status_registry_path: Path | str,
+):
+    try:
+        included_statuses = parse_status_filter_values(status_values)
+    except ValueError as exc:
+        print(f"Status filter unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    status_filter = StrategyStatusFilter(
+        exclude_retired=exclude_retired,
+        included_statuses=included_statuses,
+    )
+    status_by_strategy = load_latest_strategy_statuses(status_registry_path)
+    return filter_strategy_ids_by_status(strategy_names, status_by_strategy, status_filter)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -378,6 +446,24 @@ def main() -> None:
         help="Include parser-only local Hermes JSON fixture strategies in the comparison.",
     )
     compare_parser.add_argument(
+        "--exclude-retired",
+        action="store_true",
+        help="Opt in to excluding strategies whose latest research status is retired.",
+    )
+    compare_parser.add_argument(
+        "--status",
+        help=(
+            "Opt in to including only these comma-separated research statuses. "
+            f"Allowed: {', '.join(ALLOWED_STATUS_FILTER_VALUES)}."
+        ),
+    )
+    compare_parser.add_argument(
+        "--status-registry-path",
+        type=Path,
+        default=DEFAULT_STRATEGY_STATUS_PATH,
+        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
+    )
+    compare_parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("data/experiments"),
@@ -402,6 +488,24 @@ def main() -> None:
         type=Path,
         default=Path("data/experiments"),
         help="Directory for saved fixture sweep artifacts. Defaults to data/experiments.",
+    )
+    fixture_sweep_parser.add_argument(
+        "--exclude-retired",
+        action="store_true",
+        help="Opt in to excluding strategies whose latest research status is retired.",
+    )
+    fixture_sweep_parser.add_argument(
+        "--status",
+        help=(
+            "Opt in to including only these comma-separated research statuses. "
+            f"Allowed: {', '.join(ALLOWED_STATUS_FILTER_VALUES)}."
+        ),
+    )
+    fixture_sweep_parser.add_argument(
+        "--status-registry-path",
+        type=Path,
+        default=DEFAULT_STRATEGY_STATUS_PATH,
+        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
     )
     history_parser = subparsers.add_parser(
         "tournament-history",
@@ -583,12 +687,18 @@ def main() -> None:
             save=args.save,
             output_dir=args.output_dir,
             include_hermes_fixtures=args.include_hermes_fixtures,
+            exclude_retired=args.exclude_retired,
+            status_values=args.status,
+            status_registry_path=args.status_registry_path,
         )
     elif args.command == "fixture-sweep":
         run_fixture_sweep(
             include_hermes_fixtures=args.include_hermes_fixtures,
             save=args.save,
             output_dir=args.output_dir,
+            exclude_retired=args.exclude_retired,
+            status_values=args.status,
+            status_registry_path=args.status_registry_path,
         )
     elif args.command == "tournament-history":
         run_tournament_history(output_dir=args.output_dir)

@@ -10,12 +10,14 @@ import pytest
 
 from src.reporting.strategy_comparison import (
     ARTIFACT_COLUMNS,
+    FILTER_ARTIFACT_COLUMNS,
     SCORE_FORMULA,
     format_strategy_comparison,
     rank_strategy_reports,
     save_strategy_comparison_artifacts,
     score_strategy_report,
 )
+from src.reporting.strategy_status import set_strategy_status
 
 
 def test_compare_strategies_creates_separate_runs_for_all_local_strategies(tmp_path):
@@ -488,6 +490,163 @@ def test_compare_strategies_includes_hermes_fixtures_when_selected(tmp_path):
     ]
 
 
+def test_compare_strategies_exclude_retired_is_opt_in(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(
+        strategy_id="momentum_v1",
+        status="retired",
+        reason="Needs replacement",
+        registry_path=registry_path,
+    )
+    database_path = tmp_path / "comparison_filter.sqlite3"
+    env = _safe_env(database_path)
+
+    default_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--status-registry-path",
+            str(registry_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    filtered_database_path = tmp_path / "comparison_filter_excluded.sqlite3"
+    filtered_env = _safe_env(filtered_database_path)
+    filtered_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--exclude-retired",
+            "--status-registry-path",
+            str(registry_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=filtered_env,
+        check=False,
+    )
+
+    assert default_result.returncode == 0
+    assert filtered_result.returncode == 0
+    assert "momentum_v1" in default_result.stdout
+    assert "Retired strategies excluded." in filtered_result.stdout
+    assert "momentum_v1 (retired)" in filtered_result.stdout
+    with sqlite3.connect(filtered_database_path) as conn:
+        strategy_ids = [
+            row[0]
+            for row in conn.execute("SELECT strategy_id FROM runs ORDER BY started_at ASC, id ASC").fetchall()
+        ]
+    assert strategy_ids == ["cash_only", "spy_buy_hold"]
+
+
+def test_compare_strategies_status_filter_includes_requested_statuses(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(strategy_id="cash_only", status="active", reason="Baseline", registry_path=registry_path)
+    set_strategy_status(strategy_id="momentum_v1", status="retest", reason="Needs review", registry_path=registry_path)
+    database_path = tmp_path / "comparison_status_filter.sqlite3"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--status",
+            "active,promoted,retest",
+            "--status-registry-path",
+            str(registry_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=_safe_env(database_path),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Included statuses: active, promoted, retest" in result.stdout
+    assert "spy_buy_hold (unknown)" in result.stdout
+    with sqlite3.connect(database_path) as conn:
+        strategy_ids = [
+            row[0]
+            for row in conn.execute("SELECT strategy_id FROM runs ORDER BY started_at ASC, id ASC").fetchall()
+        ]
+    assert strategy_ids == ["cash_only", "momentum_v1"]
+
+
+def test_compare_strategies_status_unknown_can_be_requested(tmp_path):
+    database_path = tmp_path / "comparison_unknown_filter.sqlite3"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--status",
+            "unknown",
+            "--status-registry-path",
+            str(tmp_path / "missing.md"),
+        ],
+        capture_output=True,
+        text=True,
+        env=_safe_env(database_path),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Included statuses: unknown" in result.stdout
+    assert "Excluded strategies: none." in result.stdout
+    with sqlite3.connect(database_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 3
+
+
+def test_compare_strategies_saved_artifacts_include_filter_metadata(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(strategy_id="momentum_v1", status="retired", reason="Needs replacement", registry_path=registry_path)
+    database_path = tmp_path / "comparison_filter_save.sqlite3"
+    output_dir = tmp_path / "artifacts"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.main",
+            "compare-strategies",
+            "--exclude-retired",
+            "--status-registry-path",
+            str(registry_path),
+            "--save",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=_safe_env(database_path),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(next(output_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert payload["status_filter"]["applied"] is True
+    assert payload["status_filter"]["exclude_retired"] is True
+    assert payload["status_filter"]["excluded_strategies"] == [
+        {"strategy_id": "momentum_v1", "status": "retired"}
+    ]
+    with next(output_dir.glob("*.csv")).open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        assert reader.fieldnames == list(FILTER_ARTIFACT_COLUMNS)
+    markdown = next(output_dir.glob("*.md")).read_text(encoding="utf-8")
+    assert "Status filter applied: yes" in markdown
+    assert "Excluded strategies: momentum_v1 (retired)" in markdown
+
+
 def test_compare_strategies_saved_artifacts_include_hermes_fixtures_when_selected(tmp_path):
     database_path = tmp_path / "comparison_save_with_hermes.sqlite3"
     output_dir = tmp_path / "artifacts" / "hermes"
@@ -589,3 +748,13 @@ def _comparison_report(
         "trade_count": trade_count,
         "rejected_trade_count": rejected_trade_count,
     }
+
+
+def _safe_env(database_path):
+    env = os.environ.copy()
+    env["DATABASE_PATH"] = str(database_path)
+    env.pop("ALPACA_API_KEY", None)
+    env.pop("ALPACA_SECRET_KEY", None)
+    env.pop("HERMES_API_KEY", None)
+    env.pop("OPENAI_API_KEY", None)
+    return env

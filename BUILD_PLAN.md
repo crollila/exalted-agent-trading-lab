@@ -591,6 +591,43 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6R - Status-aware filtering controls
+
+Status: complete for opt-in local research strategy filtering.
+
+Included:
+
+- `compare-strategies --exclude-retired` support for excluding only strategies whose latest local research status is exactly `retired`.
+- `fixture-sweep --exclude-retired` support for excluding only strategies whose latest local research status is exactly `retired`.
+- `compare-strategies --status active,promoted,retest` support for including only strategies whose latest local status is in the requested comma-separated list.
+- `fixture-sweep --status active,promoted,retest` support for including only strategies whose latest local status is in the requested comma-separated list.
+- `unknown` is an allowed explicit `--status` value for strategies missing from the local registry or when the registry is absent.
+- Missing status registry files do not crash; missing strategy statuses resolve deterministically to `unknown`.
+- Default `compare-strategies` behavior is unchanged and still runs the same default local strategies.
+- Default `fixture-sweep` behavior is unchanged and still runs the same default local strategies across the same fixtures.
+- Retired strategies are not excluded unless filtering is explicitly requested.
+- Beginner-readable filter output lists included statuses and excluded strategy IDs with latest statuses.
+- If a filter selects no strategies, the command prints a clear skip message without running a tournament.
+- Saved comparison JSON, CSV, and Markdown artifacts include status-filter metadata when saved through the CLI.
+- Saved fixture sweep JSON, CSV, and Markdown artifacts include status-filter metadata when saved through the CLI.
+- Artifact readers remain compatible with older artifacts that do not have filter metadata.
+
+Not included:
+
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Alpaca behavior changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

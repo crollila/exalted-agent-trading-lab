@@ -13,6 +13,7 @@ from src.reporting.fixture_sweep import (
     summarize_fixture_sweep,
 )
 from src.reporting.strategy_comparison import SCORE_FORMULA
+from src.reporting.strategy_status import set_strategy_status
 
 
 EXPECTED_SWEEP_FIXTURES = (
@@ -148,6 +149,71 @@ def test_fixture_sweep_cli_include_hermes_fixtures(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def test_fixture_sweep_exclude_retired_is_opt_in(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(
+        strategy_id="momentum_v1",
+        status="retired",
+        reason="Needs replacement",
+        registry_path=registry_path,
+    )
+
+    default_result = _run_fixture_sweep_cli(
+        tmp_path / "default",
+        "--status-registry-path",
+        str(registry_path),
+    )
+    filtered_result = _run_fixture_sweep_cli(
+        tmp_path / "filtered",
+        "--exclude-retired",
+        "--status-registry-path",
+        str(registry_path),
+    )
+
+    assert default_result.returncode == 0
+    assert filtered_result.returncode == 0
+    assert "momentum_v1" in default_result.stdout
+    assert "Retired strategies excluded." in filtered_result.stdout
+    assert "momentum_v1 (retired)" in filtered_result.stdout
+    assert "momentum_v1 |" not in filtered_result.stdout
+
+
+def test_fixture_sweep_status_filter_includes_requested_statuses(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(strategy_id="cash_only", status="active", reason="Baseline", registry_path=registry_path)
+    set_strategy_status(strategy_id="momentum_v1", status="retest", reason="Needs review", registry_path=registry_path)
+
+    result = _run_fixture_sweep_cli(
+        tmp_path,
+        "--status",
+        "active,promoted,retest",
+        "--status-registry-path",
+        str(registry_path),
+    )
+
+    assert result.returncode == 0
+    assert "Included statuses: active, promoted, retest" in result.stdout
+    assert "spy_buy_hold (unknown)" in result.stdout
+    assert "cash_only   | active" in result.stdout
+    assert "momentum_v1 | retest" in result.stdout
+    assert "spy_buy_hold |" not in result.stdout
+
+
+def test_fixture_sweep_status_filter_skips_cleanly_when_no_strategies_match(tmp_path):
+    result = _run_fixture_sweep_cli(
+        tmp_path,
+        "--status",
+        "active,promoted,retest",
+        "--status-registry-path",
+        str(tmp_path / "missing.md"),
+    )
+
+    assert result.returncode == 0
+    assert "Fixture sweep skipped: status filtering excluded every selected strategy." in result.stdout
+    assert "cash_only (unknown)" in result.stdout
+    assert "Traceback" not in result.stderr
+
+
 def test_fixture_sweep_cli_save_writes_artifacts_without_credentials(tmp_path):
     output_dir = tmp_path / "artifacts"
     result = _run_fixture_sweep_cli(tmp_path, "--save", "--output-dir", str(output_dir))
@@ -160,6 +226,35 @@ def test_fixture_sweep_cli_save_writes_artifacts_without_credentials(tmp_path):
     payload = json.loads(next(output_dir.glob("fixture_sweep_*.json")).read_text(encoding="utf-8"))
     assert payload["fixtures_included"] == list(EXPECTED_SWEEP_FIXTURES)
     assert "overall_champion" in payload
+
+
+def test_fixture_sweep_saved_artifacts_include_filter_metadata(tmp_path):
+    registry_path = tmp_path / "notes" / "strategy_status.md"
+    set_strategy_status(strategy_id="momentum_v1", status="retired", reason="Needs replacement", registry_path=registry_path)
+    output_dir = tmp_path / "artifacts"
+    result = _run_fixture_sweep_cli(
+        tmp_path,
+        "--exclude-retired",
+        "--status-registry-path",
+        str(registry_path),
+        "--save",
+        "--output-dir",
+        str(output_dir),
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(next(output_dir.glob("fixture_sweep_*.json")).read_text(encoding="utf-8"))
+    assert payload["status_filter"]["applied"] is True
+    assert payload["status_filter"]["exclude_retired"] is True
+    assert payload["status_filter"]["excluded_strategies"] == [
+        {"strategy_id": "momentum_v1", "status": "retired"}
+    ]
+    with next(output_dir.glob("fixture_sweep_*.csv")).open(newline="", encoding="utf-8") as csv_file:
+        rows = list(csv.DictReader(csv_file))
+    assert rows[0]["status_filter_applied"] == "True"
+    markdown = next(output_dir.glob("fixture_sweep_*.md")).read_text(encoding="utf-8")
+    assert "Status filter applied: yes" in markdown
+    assert "Excluded strategies: momentum_v1 (retired)" in markdown
 
 
 def _sample_ranked_results():
@@ -194,6 +289,7 @@ def _aggregate(summary, strategy_id):
 
 
 def _run_fixture_sweep_cli(tmp_path, *args):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["DATABASE_PATH"] = str(tmp_path / "fixture_sweep.sqlite3")
     env.pop("ALPACA_API_KEY", None)

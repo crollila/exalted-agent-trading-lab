@@ -60,6 +60,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Research decision ledger for recording promote/modify/retest/retire/no-decision outcomes.
 - Strategy status registry for marking strategies active, promoted, retest, modified, or retired.
 - Status-aware research reports that annotate strategy status without changing which strategies run.
+- Opt-in status-aware filtering for local comparison and fixture sweep research commands.
 - Fixture sweep tournament for cross-regime robustness summaries.
 - Fixture sweep leaderboard Markdown export for saved robustness artifacts.
 
@@ -103,6 +104,9 @@ Compare strategies:
 python -m src.main compare-strategies
 python -m src.main compare-strategies --fixture multi_day
 python -m src.main compare-strategies --include-hermes-fixtures
+python -m src.main compare-strategies --exclude-retired
+python -m src.main compare-strategies --status active,promoted,retest
+python -m src.main compare-strategies --status unknown
 ```
 
 Save comparison artifacts:
@@ -118,6 +122,8 @@ Run a fixture sweep tournament:
 ```bash
 python -m src.main fixture-sweep
 python -m src.main fixture-sweep --include-hermes-fixtures
+python -m src.main fixture-sweep --exclude-retired
+python -m src.main fixture-sweep --status active,promoted,retest
 python -m src.main fixture-sweep --save
 python -m src.main fixture-sweep --save --output-dir data/experiments
 ```
@@ -216,7 +222,18 @@ Use `tournament-history` to review saved comparison JSON artifacts over time. Us
 
 Use `fixture-sweep` to run the same local strategy set across all deterministic non-flat fixtures and summarize fixture winners, aggregate wins, average score, average excess return, worst drawdown, and an overall robust champion. Sweep artifacts are ignored runtime outputs under `data/experiments` when `--save` is passed. Use `export-fixture-sweep-leaderboard` to generate a clean Markdown robustness report at `data/reports/fixture_sweep_leaderboard.md` by default. Use `create-sweep-analysis-note` to turn the latest valid saved fixture sweep artifact into a Markdown human review template under `data/notes` by default. Existing sweep notes are not overwritten unless `--force` is passed.
 
-Research reports such as `fixture-sweep`, `tournament-champion`, `export-leaderboard`, and `export-fixture-sweep-leaderboard` annotate strategies with the latest local status from `data/notes/strategy_status.md` when present. Missing statuses display as `unknown`. Statuses are reporting annotations only and do not filter or change which strategies run.
+Research reports such as `fixture-sweep`, `tournament-champion`, `export-leaderboard`, and `export-fixture-sweep-leaderboard` annotate strategies with the latest local status from `data/notes/strategy_status.md` when present. Missing statuses display as `unknown`. Statuses are reporting annotations by default and do not filter or change which strategies run unless you explicitly opt in with filtering flags.
+
+Status-aware filtering is available only for local research selection in `compare-strategies` and `fixture-sweep`:
+
+```bash
+python -m src.main compare-strategies --exclude-retired
+python -m src.main compare-strategies --status active,promoted,retest
+python -m src.main fixture-sweep --exclude-retired
+python -m src.main fixture-sweep --status active,promoted,retest
+```
+
+`--exclude-retired` excludes only strategies whose latest local status is exactly `retired`. `--status` accepts a comma-separated list from `active`, `promoted`, `retest`, `modified`, `retired`, and `unknown`. `unknown` means the strategy has no local status entry or the registry is missing. If filtering is used with `--save`, the saved JSON, CSV, and Markdown artifacts include filter metadata.
 
 ## Portfolio note
 
