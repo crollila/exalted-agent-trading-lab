@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 7D Hermes runtime adapter completed.
+Phase 7E Discord bot skeleton completed.
 
 Included:
 
@@ -195,6 +195,14 @@ Included:
 - `data/agent_runs/` is ignored for local generated proposal files.
 - Runtime tests mock HTTP completely and require no real Hermes endpoint, real LLM, network, credentials, Alpaca, or broker access.
 - Phase 7D does not call Alpaca, submit orders, write orders, change portfolio state, enable live trading, grant Hermes broker access, or allow broker/order/risk bypasses.
+- Local Discord command-center bot was added for safe lab summaries.
+- `src/discord_bot/bot.py` defines environment parsing, channel allowlist handling, Discord-friendly summary builders, prefix commands, and slash command registration.
+- `discord-bot` CLI refuses clearly when `DISCORD_BOT_TOKEN` is missing.
+- Discord configuration supports optional `DISCORD_GUILD_ID`, optional comma-separated `DISCORD_ALLOWED_CHANNEL_IDS`, and local default registry/proposal paths.
+- Bot commands support status, teams, proposal review, tournament routing summaries, and `ask_team` proposal generation using existing Hermes registry, runtime, sandbox, and tournament logic.
+- `ask_team` requires the existing Hermes runtime configuration, saves generated proposal JSON under ignored `data/agent_runs/`, validates the saved file through the sandbox router, and returns route counts to Discord.
+- `docs/discord_bot_setup.md` documents beginner setup and run steps without real tokens or IDs.
+- Phase 7E does not call Alpaca, submit orders, write orders, change portfolio state, enable live trading, grant Discord broker access, or allow broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -206,7 +214,7 @@ Included:
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
 - Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, status-aware reports, analysis notes, fixture sweep analysis notes, research decisions, strategy status registry, and performance.
-- Expanded tests for opt-in status-aware comparison and fixture sweep filtering, unknown status behavior, filter output, and saved filter metadata.
+- Expanded tests for opt-in status-aware comparison and fixture sweep filtering, unknown status behavior, filter output, saved filter metadata, and Discord bot local command summaries.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -236,10 +244,11 @@ Current allowed mode:
 - Phase 7B adds local-only Hermes team registry review only; agent identities, roles, and learning notes do not grant broker, order, LLM, Alpaca, or execution authority.
 - Phase 7C adds local-only Hermes tournament round route scoring only; tournament winners are based on proposal routing counts, not profitability or trading approval.
 - Phase 7D adds opt-in Hermes proposal generation only; generated output is local sandbox JSON and must still pass local review/routing before any research use.
+- Phase 7E adds a local Discord command center only; Discord commands summarize local lab state and do not call Alpaca, submit orders, approve execution, or change portfolio state.
 
 ## Next step
 
-Review Phase 7D Hermes runtime adapter with a configured local endpoint only when explicitly enabled, then feed generated files through sandbox review and tournament routing.
+Run the Discord bot locally with a real `DISCORD_BOT_TOKEN` and restricted `DISCORD_ALLOWED_CHANNEL_IDS`, then use it for safe status, team, proposal review, and tournament summaries.
 
 ## Project manager rule
 

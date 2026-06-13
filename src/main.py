@@ -379,6 +379,12 @@ def run_hermes_generate_proposals_cli(
     print(format_hermes_generation_result(result))
 
 
+def run_discord_bot_cli() -> None:
+    from src.discord_bot.bot import run_discord_bot
+
+    run_discord_bot()
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -836,6 +842,10 @@ def main() -> None:
         default=DEFAULT_STRATEGY_STATUS_PATH,
         help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
     )
+    subparsers.add_parser(
+        "discord-bot",
+        help="Run the safe local Discord command-center bot",
+    )
 
     args = parser.parse_args()
 
@@ -929,6 +939,8 @@ def main() -> None:
         )
     elif args.command == "strategy-status":
         run_strategy_status(registry_path=args.registry_path)
+    elif args.command == "discord-bot":
+        run_discord_bot_cli()
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

@@ -55,6 +55,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Hermes team registry for local-only agent/team identities, roles, learning notes, and future tournament tracking placeholders.
 - Hermes tournament round runner for local-only route-score team rankings from registry and proposal JSON files.
 - Opt-in Hermes runtime adapter for generating strict local sandbox proposal JSON through a configured OpenAI-compatible endpoint.
+- Local Discord command-center bot for safe status, team, proposal review, and tournament summaries.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
 - Tournament champion report across saved ranked tournaments.
@@ -188,6 +189,20 @@ python -m src.main review-hermes-sandbox --file data/agent_runs/team_alpha_runti
 python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_registry_example.json --proposal data/agent_runs/team_alpha_runtime_v1.json
 ```
 
+Run the local Discord command-center bot after setting a bot token:
+
+```bash
+python -m src.main discord-bot
+```
+
+See `docs/discord_bot_setup.md` for beginner setup steps. The bot supports `!status`, `!teams`, `!review_proposals`, `!run_tournament`, and `!ask_team`, plus slash commands when Discord sync succeeds.
+
+Ask a configured Hermes team for proposal JSON from Discord:
+
+```text
+!ask_team team_alpha alpha_research_1 research_agent team_alpha_discord_v1 Find a high-conviction strategy for tomorrow
+```
+
 Create a human analysis note from the latest valid tournament artifact:
 
 ```bash
@@ -262,6 +277,8 @@ Use `hermes-tournament-round` to rank teams by local proposal routing counts. Th
 
 Use `hermes-generate-proposals` only after explicitly setting `HERMES_ENABLED=true`, `HERMES_BASE_URL`, and `HERMES_MODEL`. It calls a generic OpenAI-compatible chat completions endpoint, saves raw generated JSON under a local path such as `data/agent_runs`, then validates that file through `review-hermes-sandbox`. It does not call Alpaca, submit orders, read broker credentials, or change portfolio state.
 
+Use `discord-bot` to run a local Discord command center for safe lab summaries. It requires `DISCORD_BOT_TOKEN`, optionally restricts commands with `DISCORD_ALLOWED_CHANNEL_IDS`, and uses local default files from `DISCORD_DEFAULT_REGISTRY` and `DISCORD_DEFAULT_PROPOSAL`. Discord commands call the same local registry, sandbox review, and tournament routing logic; they do not call Alpaca, place orders, approve execution, or change portfolio state. `!ask_team` uses the existing Hermes runtime config (`HERMES_ENABLED`, `HERMES_BASE_URL`, `HERMES_MODEL`) to save proposal JSON under ignored `data/agent_runs/`, then immediately validates it through the sandbox router. The flow is Discord -> bot -> Hermes runtime -> proposal JSON -> sandbox review, not Discord -> Alpaca.
+
 Use `--save` to write durable local research artifacts under `data/experiments` by default:
 
 - JSON for machine-readable review.
@@ -307,6 +324,8 @@ Phase 7C adds a Hermes tournament round runner for local JSON review only. It co
 
 Phase 7D adds an opt-in Hermes runtime adapter for local/OpenAI-compatible proposal generation only. Hermes output is strict local sandbox JSON, not trading approval, and generated `data/agent_runs` files are ignored runtime artifacts.
 
+Phase 7E adds a local Discord command-center bot for safe lab commands only. It can report status, teams, proposal review summaries, routing-score tournament summaries, and ask configured Hermes teams for proposal JSON, but it cannot trade, call Alpaca, submit orders, approve execution, or bypass risk controls.
+
 Current executable behavior remains stock-only, long-only, cash-only, no executable options, no executable margin, no executable shorting, no live trading, and no LLM direct execution.
 
 ## Portfolio note
@@ -320,4 +339,5 @@ This repo is designed to show practical engineering judgment around Python, SQLi
 - `docs/risk_policy.md` records current trading permissions and hard limits.
 - `docs/advanced_permissions_plan.md` records a non-enabling roadmap for possible future advanced permissions.
 - `docs/hermes_setup.md` records the disabled Hermes runtime posture and parser-only fixture behavior.
+- `docs/discord_bot_setup.md` records local Discord bot setup and safe command usage.
 - `docs/codex_workflow.md` records the ChatGPT/Codex workflow.

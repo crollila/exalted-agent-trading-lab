@@ -980,7 +980,38 @@ Not included:
 - Risk bypasses.
 - Automatic tournament submission.
 
-### Future Phase 7E - Advanced broker-paper implementation gate
+### Phase 7E - Discord bot skeleton
+
+Status: complete for safe local Discord command-center commands.
+
+Goal: run a local Discord bot for quick lab status, Hermes team, proposal review, Hermes ask-team proposal generation, and tournament summaries without adding any trading authority.
+
+Included:
+
+- New Discord bot module at `src/discord_bot/bot.py`.
+- `discord-bot` CLI command with clear refusal when `DISCORD_BOT_TOKEN` is missing.
+- Optional `DISCORD_GUILD_ID`, optional comma-separated `DISCORD_ALLOWED_CHANNEL_IDS`, and default local registry/proposal file environment variables.
+- Startup warning when `DISCORD_ALLOWED_CHANNEL_IDS` is unset and all channels are allowed.
+- Prefix commands `!status`, `!teams`, `!review_proposals`, and `!run_tournament`.
+- Prefix command `!ask_team <team_id> <agent_id> <agent_role> <strategy_id> <prompt text>` for configured Hermes runtime proposal generation.
+- Slash command registration for `/status`, `/teams`, `/review_proposals`, `/run_tournament`, and `/ask_team` when Discord command sync succeeds.
+- Discord-friendly summaries using the existing Hermes team registry, sandbox review, and tournament round logic.
+- `!ask_team` uses the existing Hermes runtime adapter, saves generated proposal JSON under ignored `data/agent_runs/`, validates it through the sandbox router, and returns saved path plus route counts.
+- Beginner setup guide at `docs/discord_bot_setup.md`.
+- Tests cover missing-token refusal, allowlist parsing, summaries, ask-team mocked runtime generation, saved proposal validation, local-only behavior, and CLI refusal without connecting to Discord.
+
+Not included:
+
+- Live trading.
+- Alpaca calls.
+- Broker calls.
+- Order execution or order writes.
+- Portfolio state changes.
+- Risk bypasses.
+- Real Discord network calls in tests.
+- Real Hermes network calls in tests.
+
+### Future Phase 7F - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 
