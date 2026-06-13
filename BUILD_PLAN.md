@@ -919,7 +919,39 @@ Not included:
 - Trading permission changes.
 - Risk bypasses.
 
-### Future Phase 7C - Advanced broker-paper implementation gate
+### Phase 7C - Hermes tournament round runner
+
+Status: complete for local-only routing-score tournaments.
+
+Goal: run a Nate-style local tournament round from a Hermes team registry and one or more strict local Hermes proposal files.
+
+Included:
+
+- New local-only tournament module at `src/agents/hermes_tournament_round.py`.
+- `hermes-tournament-round` CLI command with `--registry`, repeatable or comma-separated `--proposal`, `--output-dir`, and `--save`.
+- Registry loading through the existing Hermes team registry validation.
+- Proposal loading through the existing Hermes strategy sandbox router.
+- Safe handling for malformed proposal files and unknown proposal team IDs.
+- Per-proposal/team rows with team ID, agent ID, strategy ID, total proposals, route counts, rejected count, score, and warnings.
+- Deterministic score formula: `score = paper_eligible_count * 2 + simulation_only_count * 1 - rejected_count * 1`.
+- Deterministic team ranking by score descending, fewer rejected proposals, then team ID alphabetical.
+- CLI output with winner, proposal rows, rankings, warnings, and the disclaimer that routing score is not profitability.
+- Optional `--save` writes local JSON and Markdown artifacts under `data/experiments` by default.
+- Second local proposal example for `team_beta` at `docs/examples/hermes_strategy_sandbox_team_beta_example.json`.
+
+Not included:
+
+- Hermes runtime calls.
+- Real LLM/API calls.
+- Alpaca calls.
+- Broker calls.
+- Order execution or order writes.
+- Portfolio state changes.
+- Profitability scoring.
+- Trading permission changes.
+- Risk bypasses.
+
+### Future Phase 7D - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 

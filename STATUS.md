@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 7B Hermes agent team registry completed.
+Phase 7C Hermes tournament round runner completed.
 
 Included:
 
@@ -173,6 +173,18 @@ Included:
 - `hermes-teams --file` reads a local JSON file only and prints teams, agents, active/inactive status, roles, and `registry only; no trading or LLM calls`.
 - Phase 7B does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
 - Phase 7B does not submit or write orders, change portfolio state, enable advanced execution, weaken risk policy, or allow broker/order/risk bypasses.
+- Hermes tournament round runner was added for local-only team proposal route scoring.
+- `src/agents/hermes_tournament_round.py` loads a Hermes team registry plus one or more Hermes sandbox proposal JSON files.
+- `hermes-tournament-round --registry --proposal` runs local routing-score tournaments and supports repeatable or comma-separated proposal paths.
+- Tournament rows include team ID, agent ID, strategy ID, total proposals, route counts for paper-eligible stock longs and simulation-only short/option/margin ideas, rejected count, score, and warnings.
+- Tournament scoring uses `score = paper_eligible_count * 2 + simulation_only_count * 1 - rejected_count * 1`.
+- Team rankings sort by score descending, fewer rejected proposals, then team ID alphabetical.
+- Malformed proposal files and unknown proposal team IDs are handled as safe warning/rejection rows without traceback.
+- `hermes-tournament-round --save` writes local JSON and Markdown artifacts under `data/experiments` by default.
+- The CLI prints a winner, rankings, and the disclaimer that routing score is not profitability.
+- A second local proposal example was added at `docs/examples/hermes_strategy_sandbox_team_beta_example.json`.
+- Phase 7C does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
+- Phase 7C does not submit or write orders, change portfolio state, enable advanced execution, score profitability, weaken risk policy, or allow broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -212,10 +224,11 @@ Current allowed mode:
 - Phase 6X adds local-only options simulation foundations only; it does not change current trading permissions or risk limits.
 - Phase 7A adds local-only Hermes sandbox review only; Hermes can propose advanced ideas, but the review command cannot place orders directly, call Alpaca, call LLMs, call brokers, enable live trading, or bypass broker/order/risk controls.
 - Phase 7B adds local-only Hermes team registry review only; agent identities, roles, and learning notes do not grant broker, order, LLM, Alpaca, or execution authority.
+- Phase 7C adds local-only Hermes tournament round route scoring only; tournament winners are based on proposal routing counts, not profitability or trading approval.
 
 ## Next step
 
-Review Phase 7B Hermes team registry output, then consider later tournament-round tracking only after explicit approval.
+Review Phase 7C Hermes tournament round outputs, then consider later saved-round history or learning-note feedback only after explicit approval.
 
 ## Project manager rule
 

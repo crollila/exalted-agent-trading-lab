@@ -171,9 +171,9 @@ def test_cli_review_works_without_credentials():
     )
 
     assert result.returncode == 0
-    assert "Team ID: wealth-advisor-sandbox" in result.stdout
-    assert "Agent ID: hermes-agent-001" in result.stdout
-    assert "Strategy ID: hermes_multi_agent_sandbox_v1" in result.stdout
+    assert "Team ID: team_alpha" in result.stdout
+    assert "Agent ID: alpha_research_01" in result.stdout
+    assert "Strategy ID: alpha_quality_momentum_v1" in result.stdout
     assert "Hermes proposals are not execution approval" in result.stdout
     assert f"- {PAPER_ELIGIBLE_STOCK_LONG}: 1" in result.stdout
     assert f"- {SIMULATION_ONLY_SHORT}: 1" in result.stdout

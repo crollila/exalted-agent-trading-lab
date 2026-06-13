@@ -53,6 +53,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Hermes parser-only fixture strategies using hardcoded local JSON.
 - Hermes multi-agent strategy sandbox router for strict local JSON review of stock, short, option, margin, and rejected ideas.
 - Hermes team registry for local-only agent/team identities, roles, learning notes, and future tournament tracking placeholders.
+- Hermes tournament round runner for local-only route-score team rankings from registry and proposal JSON files.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
 - Tournament champion report across saved ranked tournaments.
@@ -168,6 +169,13 @@ Review a local Hermes team registry file:
 python -m src.main hermes-teams --file docs/examples/hermes_team_registry_example.json
 ```
 
+Run a local Hermes tournament round:
+
+```bash
+python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_registry_example.json --proposal docs/examples/hermes_strategy_sandbox_example.json --proposal docs/examples/hermes_strategy_sandbox_team_beta_example.json
+python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_registry_example.json --proposal docs/examples/hermes_strategy_sandbox_example.json --save
+```
+
 Create a human analysis note from the latest valid tournament artifact:
 
 ```bash
@@ -238,6 +246,8 @@ Use `review-hermes-sandbox` to inspect strict local JSON from a future Hermes mu
 
 Use `hermes-teams` to inspect strict local team registry JSON before any Hermes runtime integration exists. The registry tracks team IDs, agent IDs, roles, active/inactive status, optional strategy family, latest strategy placeholders, and learning notes. It is identity metadata only and does not call Alpaca, Hermes, LLMs, market data, or any broker.
 
+Use `hermes-tournament-round` to rank teams by local proposal routing counts. The deterministic score is `paper_eligible_count * 2 + simulation_only_count * 1 - rejected_count * 1`, with tie-breakers of fewer rejected proposals and then team ID alphabetical. This is routing score only, not profitability, not execution approval, and not broker behavior.
+
 Use `--save` to write durable local research artifacts under `data/experiments` by default:
 
 - JSON for machine-readable review.
@@ -278,6 +288,8 @@ Phase 6X adds a local-only options simulator foundation for deterministic premiu
 Phase 7A adds a Hermes multi-agent strategy sandbox router for local JSON review only. Hermes can propose advanced ideas, but the router cannot place orders, approve execution, call brokers, call LLMs, or bypass risk controls.
 
 Phase 7B adds a Hermes agent team registry for local JSON review only. Team and agent identities help future tournaments track who submitted strategies and what they learned, but they grant no broker, order, LLM, Alpaca, or execution authority.
+
+Phase 7C adds a Hermes tournament round runner for local JSON review only. It consumes local registry/proposal files, routes proposals, scores teams by routing counts, and optionally saves ignored local artifacts; it does not measure profitability or approve execution.
 
 Current executable behavior remains stock-only, long-only, cash-only, no executable options, no executable margin, no executable shorting, no live trading, and no LLM direct execution.
 

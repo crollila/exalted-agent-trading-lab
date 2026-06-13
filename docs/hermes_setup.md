@@ -71,6 +71,14 @@ python -m src.main hermes-teams --file docs/examples/hermes_team_registry_exampl
 
 The registry records team IDs, agent IDs, roles, active/inactive status, optional strategy family, latest strategy placeholders, and learning notes. It is registry metadata only. It does not call Hermes, call Alpaca, call LLMs, call brokers, submit orders, write orders, or grant execution authority.
 
+Phase 7C adds local tournament rounds that consume only registry JSON and proposal JSON:
+
+```bash
+python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_registry_example.json --proposal docs/examples/hermes_strategy_sandbox_example.json --proposal docs/examples/hermes_strategy_sandbox_team_beta_example.json
+```
+
+Tournament rounds load local files, route proposals through the sandbox router, score teams by routing counts, and rank teams deterministically. The score is routing score only, not profitability, trading approval, broker readiness, or risk approval. With `--save`, artifacts are local ignored research outputs under `data/experiments` by default.
+
 Hermes runtime remains disabled. A future Hermes process, if added, must output strict local JSON for human/Codex review and must not receive broker credentials, Alpaca access, API keys, or direct order authority.
 
 ## Parser requirements

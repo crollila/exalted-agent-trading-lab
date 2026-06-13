@@ -5,6 +5,11 @@ from pathlib import Path
 
 from src.agents.hermes_team_registry import format_hermes_team_registry, load_hermes_team_registry_file
 from src.agents.hermes_strategy_sandbox import format_hermes_sandbox_result, load_hermes_sandbox_file
+from src.agents.hermes_tournament_round import (
+    format_hermes_tournament_round,
+    run_hermes_tournament_round,
+    save_hermes_tournament_round_artifacts,
+)
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
@@ -316,6 +321,29 @@ def run_hermes_teams(file_path: Path | str) -> None:
     print(format_hermes_team_registry(registry))
 
 
+def run_hermes_tournament_round_cli(
+    registry_path: Path | str,
+    proposal_paths: list[Path | str],
+    save: bool = False,
+    output_dir: Path | str = Path("data/experiments"),
+) -> None:
+    try:
+        result = run_hermes_tournament_round(
+            registry_path=registry_path,
+            proposal_paths=proposal_paths,
+        )
+    except ValueError as exc:
+        print(f"Hermes tournament round unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(format_hermes_tournament_round(result))
+    if save:
+        artifacts = save_hermes_tournament_round_artifacts(result, output_dir=output_dir)
+        print("Saved Hermes tournament round artifacts:")
+        print(f"JSON: {artifacts.json_path}")
+        print(f"Markdown: {artifacts.markdown_path}")
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -620,6 +648,33 @@ def main() -> None:
         required=True,
         help="Local Hermes team registry JSON file to review.",
     )
+    hermes_tournament_parser = subparsers.add_parser(
+        "hermes-tournament-round",
+        help="Run a local-only Hermes team proposal routing tournament",
+    )
+    hermes_tournament_parser.add_argument(
+        "--registry",
+        type=Path,
+        required=True,
+        help="Local Hermes team registry JSON file.",
+    )
+    hermes_tournament_parser.add_argument(
+        "--proposal",
+        action="append",
+        required=True,
+        help="Local Hermes proposal JSON file. Repeat or comma-separate for multiple files.",
+    )
+    hermes_tournament_parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save local JSON and Markdown tournament artifacts.",
+    )
+    hermes_tournament_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/experiments"),
+        help="Directory for saved tournament artifacts. Defaults to data/experiments.",
+    )
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -775,6 +830,18 @@ def main() -> None:
         run_review_hermes_sandbox(file_path=args.file)
     elif args.command == "hermes-teams":
         run_hermes_teams(file_path=args.file)
+    elif args.command == "hermes-tournament-round":
+        try:
+            proposal_paths = _proposal_paths_from_args(args.proposal)
+        except ValueError as exc:
+            print(f"Hermes tournament round unavailable: {exc}")
+            raise SystemExit(1) from exc
+        run_hermes_tournament_round_cli(
+            registry_path=args.registry,
+            proposal_paths=proposal_paths,
+            save=args.save,
+            output_dir=args.output_dir,
+        )
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "create-sweep-analysis-note":
@@ -803,6 +870,15 @@ def main() -> None:
         run_strategy_status(registry_path=args.registry_path)
     else:
         raise ValueError(f"Unknown command: {args.command}")
+
+
+def _proposal_paths_from_args(values: list[str]) -> list[Path]:
+    paths: list[Path] = []
+    for value in values:
+        paths.extend(Path(part.strip()) for part in value.split(",") if part.strip())
+    if not paths:
+        raise ValueError("At least one --proposal path is required.")
+    return paths
 
 
 if __name__ == "__main__":

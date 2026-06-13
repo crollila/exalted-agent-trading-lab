@@ -1,8 +1,8 @@
 {
-  "agent_id": "hermes-agent-001",
-  "team_id": "wealth-advisor-sandbox",
-  "strategy_id": "hermes_multi_agent_sandbox_v1",
-  "agent_role": "portfolio strategist",
+  "agent_id": "alpha_research_01",
+  "team_id": "team_alpha",
+  "strategy_id": "alpha_quality_momentum_v1",
+  "agent_role": "research_agent",
   "strategy_notes": "Mixed proposal review for local sandbox routing only.",
   "learning_goal": "Compare how long stock, short stock, option, and invalid ideas are classified before any execution layer.",
   "proposals": [
