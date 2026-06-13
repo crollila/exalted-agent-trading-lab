@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6W options design models completed.
+Phase 6X options dry-run simulator foundation completed.
 
 Included:
 
@@ -143,6 +143,14 @@ Included:
 - Tests prove the current executable risk flow still rejects options.
 - Tests prove dry-run comparison and fixture sweep behavior is unchanged.
 - Phase 6W does not change compare-strategies behavior, fixture-sweep behavior, broker/order execution behavior, existing risk-engine permissions, dry-run execution, Alpaca behavior, strategy wiring, executable shorting, margin, live trading, or Hermes runtime wiring.
+- Local-only options simulator foundation was added for future research simulation.
+- `src/simulation/options_simulator.py` simulates inert `OptionProposal` objects against deterministic local premium inputs only.
+- Option simulation result models report entry premium, exit premium, contracts, contract multiplier, premium paid, exit value, realized P/L, max premium at risk, return on premium, optional intrinsic value at expiration, optional expiration outcome, and simulation-only premium-at-risk risk events.
+- Simulator tests cover profitable long calls when premium rises, losing long calls when premium falls, profitable long puts when premium rises, deterministic premium-at-risk calculations, contract multiplier handling, return-on-premium calculations, premium-at-risk limit events, invalid `OptionProposal` rejection, and local-only inputs without Alpaca credentials.
+- Tests prove `compare-strategies`, `fixture-sweep`, and `export-short-simulation-report` behavior remains unchanged.
+- Tests prove the executable risk engine still rejects options.
+- Phase 6X does not add a CLI command and does not write runtime artifacts.
+- Phase 6X does not enable options execution, executable shorting, margin, broker calls, Alpaca options calls, order execution changes, risk engine behavior changes, live trading, strategy options integration, or Hermes runtime wiring.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -179,10 +187,11 @@ Current allowed mode:
 - Phase 6U adds local-only shorting simulation foundations only; it does not change current trading permissions or risk limits.
 - Phase 6V adds local-only shorting simulation report export only; it does not change current trading permissions or risk limits.
 - Phase 6W adds inert options design models only; it does not change current trading permissions or risk limits.
+- Phase 6X adds local-only options simulation foundations only; it does not change current trading permissions or risk limits.
 
 ## Next step
 
-Review Phase 6W options design models, then consider later permission-gated simulation work only after explicit approval.
+Review Phase 6X options dry-run simulator foundation, then consider later permission-gated report/export work only after explicit approval.
 
 ## Project manager rule
 

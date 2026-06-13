@@ -808,23 +808,55 @@ Not included:
 - Live trading.
 - Hermes runtime wiring.
 
-### Future Phase 6X - Paper margin design
+### Phase 6X - Options dry-run simulator foundation
+
+Status: complete for isolated local-only options simulation foundation.
+
+Goal: simulate future-facing `OptionProposal` objects with deterministic local premium inputs only, without enabling options execution.
+
+Included:
+
+- Isolated simulation-only options module at `src/simulation/options_simulator.py`.
+- Local-only `simulate_option_proposal` function that accepts inert `OptionProposal` objects and deterministic local premium inputs.
+- Simulation result models for option position results, premium-at-risk risk events, and simulation-only outputs.
+- Deterministic calculations for entry premium, exit premium, contracts, contract multiplier, premium paid, exit value, realized P/L, max premium at risk, return on premium, optional intrinsic value at expiration, and optional expiration outcome.
+- Risk event detection when simulated premium at risk exceeds configured option risk limits.
+- Tests for profitable long-call simulation when premium rises.
+- Tests for losing long-call simulation when premium falls.
+- Tests for profitable long-put simulation when premium rises.
+- Tests for deterministic premium-at-risk calculation, contract multiplier handling, return-on-premium calculation, and premium-at-risk risk events.
+- Tests proving invalid `OptionProposal` objects are rejected by model validation.
+- Tests proving the simulator requires only local deterministic inputs and no Alpaca credentials.
+- Tests proving `compare-strategies`, `fixture-sweep`, and `export-short-simulation-report` behavior remains unchanged.
+- Tests proving the executable risk engine still rejects options.
+
+Not included:
+
+- Options execution.
+- Broker options calls.
+- Alpaca options calls.
+- Order executor changes.
+- Risk engine behavior changes.
+- Existing dry-run execution changes.
+- Runtime artifacts.
+- CLI command.
+- Strategy options integration.
+- Executable shorting.
+- Margin.
+- Live trading.
+- Hermes runtime wiring.
+
+### Future Phase 6Y - Paper margin design
 
 Status: planned, not implemented.
 
 Goal: design explicit margin permission, exposure accounting, margin call simulation, daily loss limits, and forced deleveraging without enabling margin.
 
-### Future Phase 6Y - Paper margin dry-run simulation
+### Future Phase 6Z - Paper margin dry-run simulation
 
 Status: planned, not implemented.
 
 Goal: simulate margin exposure and forced deleveraging locally after design and tests, with no broker calls.
-
-### Future Phase 6Z - Paper options dry-run simulation
-
-Status: planned, not implemented.
-
-Goal: simulate option proposals locally after design and tests, with no broker calls.
 
 ### Future Phase 7A - Advanced broker-paper implementation gate
 
