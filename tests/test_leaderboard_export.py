@@ -75,8 +75,8 @@ def test_leaderboard_export_includes_strategy_aggregate_table(tmp_path):
     markdown = _exported_markdown(tmp_path)
 
     assert "## Strategy Aggregates" in markdown
-    assert "| Strategy ID | Appearances | Wins | Win Rate | Best Score | Average Score | Average Excess Return | Worst Max Drawdown |" in markdown
-    assert "| alpha | 1 | 1 | 100.00% | 0.0400 | 0.0400 | 4.00% | -1.00% |" in markdown
+    assert "| Strategy ID | Status | Appearances | Wins | Win Rate | Best Score | Average Score | Average Excess Return | Worst Max Drawdown |" in markdown
+    assert "| alpha | unknown | 1 | 1 | 100.00% | 0.0400 | 0.0400 | 4.00% | -1.00% |" in markdown
 
 
 def test_leaderboard_export_includes_recent_tournament_table(tmp_path):

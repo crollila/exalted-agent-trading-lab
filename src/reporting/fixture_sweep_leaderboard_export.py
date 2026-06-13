@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.reporting.fixture_sweep import FixtureWinner, StrategyRobustness
+from src.reporting.strategy_status import DEFAULT_STRATEGY_STATUS_PATH, load_latest_strategy_statuses, strategy_status_for
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def export_fixture_sweep_leaderboard(
     output_dir: Path | str = Path("data/experiments"),
     report_path: Path | str = Path("data/reports/fixture_sweep_leaderboard.md"),
     generated_at: datetime | None = None,
+    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
 ) -> FixtureSweepLeaderboardExportResult:
     active_report_path = Path(report_path)
     loaded = load_fixture_sweep_artifacts(output_dir)
@@ -72,6 +74,7 @@ def export_fixture_sweep_leaderboard(
         loaded=loaded,
         output_dir=output_dir,
         generated_at=generated_at,
+        status_by_strategy=load_latest_strategy_statuses(status_registry_path),
     )
     active_report_path.parent.mkdir(parents=True, exist_ok=True)
     active_report_path.write_text(markdown, encoding="utf-8")
@@ -114,6 +117,7 @@ def format_fixture_sweep_leaderboard(
     loaded: FixtureSweepArtifactLoadResult,
     output_dir: Path | str,
     generated_at: datetime | None = None,
+    status_by_strategy: dict[str, str] | None = None,
 ) -> str:
     if not loaded.entries:
         raise ValueError("Cannot format fixture sweep leaderboard without valid sweep artifacts.")
@@ -137,6 +141,7 @@ def format_fixture_sweep_leaderboard(
         "## Current Robust Champion",
         "",
         f"- Champion strategy ID: `{summary.champion.strategy_id}`",
+        f"- Champion strategy status: `{strategy_status_for(summary.champion.strategy_id, status_by_strategy)}`",
         f"- Valid sweeps reviewed: {summary.valid_sweeps_reviewed}",
         f"- Fixture appearances: {summary.champion.fixture_count}",
         f"- Fixture wins: {summary.champion.wins}",
@@ -177,6 +182,7 @@ def format_fixture_sweep_leaderboard(
         _markdown_table(
             headers=(
                 "Strategy ID",
+                "Status",
                 "Fixture Appearances",
                 "Fixture Wins",
                 "Win Rate",
@@ -187,6 +193,7 @@ def format_fixture_sweep_leaderboard(
             rows=[
                 (
                     row.strategy_id,
+                    strategy_status_for(row.strategy_id, status_by_strategy),
                     str(row.fixture_count),
                     str(row.wins),
                     _percent(row.wins / row.fixture_count),

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.reporting.strategy_status import DEFAULT_STRATEGY_STATUS_PATH, load_latest_strategy_statuses, strategy_status_for
 from src.reporting.strategy_comparison import SCORE_FORMULA
 from src.reporting.tournament_champion import TournamentChampionResult, load_tournament_champion
 from src.reporting.tournament_history import TournamentHistoryEntry
@@ -32,6 +33,7 @@ def export_strategy_leaderboard(
     output_dir: Path | str = Path("data/experiments"),
     report_path: Path | str = Path("data/reports/strategy_leaderboard.md"),
     generated_at: datetime | None = None,
+    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
 ) -> LeaderboardExportResult:
     active_report_path = Path(report_path)
     champion_result = load_tournament_champion(output_dir)
@@ -46,6 +48,7 @@ def export_strategy_leaderboard(
         champion_result=champion_result,
         output_dir=output_dir,
         generated_at=generated_at,
+        status_by_strategy=load_latest_strategy_statuses(status_registry_path),
     )
     active_report_path.parent.mkdir(parents=True, exist_ok=True)
     active_report_path.write_text(markdown, encoding="utf-8")
@@ -60,6 +63,7 @@ def format_strategy_leaderboard(
     champion_result: TournamentChampionResult,
     output_dir: Path | str,
     generated_at: datetime | None = None,
+    status_by_strategy: dict[str, str] | None = None,
 ) -> str:
     if champion_result.summary is None:
         raise ValueError("Cannot format leaderboard without valid tournament artifacts.")
@@ -78,6 +82,7 @@ def format_strategy_leaderboard(
         "## Current Champion",
         "",
         f"- Champion strategy ID: `{summary.champion_strategy_id}`",
+        f"- Champion strategy status: `{strategy_status_for(summary.champion_strategy_id, status_by_strategy)}`",
         f"- Valid tournaments reviewed: {summary.valid_tournaments_reviewed}",
         f"- Wins: {summary.champion_wins}",
         f"- Win rate: {_percent(summary.champion_win_rate)}",
@@ -137,6 +142,7 @@ def format_strategy_leaderboard(
         _markdown_table(
             headers=(
                 "Strategy ID",
+                "Status",
                 "Appearances",
                 "Wins",
                 "Win Rate",
@@ -148,6 +154,7 @@ def format_strategy_leaderboard(
             rows=[
                 (
                     row.strategy_id,
+                    strategy_status_for(row.strategy_id, status_by_strategy),
                     str(row.appearances),
                     str(row.wins),
                     _percent(row.win_rate),

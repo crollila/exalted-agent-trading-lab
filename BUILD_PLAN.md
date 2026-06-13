@@ -557,6 +557,40 @@ Not included:
 - External LLM/API calls.
 - Options, margin, shorting, or sell proposals.
 
+### Phase 6Q - Status-aware research reports
+
+Status: complete for local status annotations in research reports.
+
+Included:
+
+- Reports read latest strategy statuses from `data/notes/strategy_status.md` when present.
+- Missing registry or missing strategy entries display as `unknown`.
+- `fixture-sweep` terminal output includes strategy status in the robustness table.
+- `fixture-sweep --save` JSON artifacts include a `strategy_statuses` map.
+- `fixture-sweep --save` CSV artifacts include a status column.
+- `fixture-sweep --save` Markdown artifacts include status in the strategy robustness table.
+- `tournament-champion` terminal output includes the current champion strategy status.
+- `export-leaderboard` Markdown reports include champion status and strategy status in aggregate tables.
+- `export-fixture-sweep-leaderboard` Markdown reports include robust champion status and strategy status in aggregate tables.
+- Strategy status annotations are deterministic reporting metadata only.
+- Tests cover status registry parsing/reuse, missing registry behavior, fixture-sweep status output, tournament champion status output, exported leaderboard status output, exported fixture sweep leaderboard status output, saved sweep artifact status annotations, no execution filtering from retired status, and no external service or credential requirement.
+
+Not included:
+
+- Filtering, excluding, or changing which strategies run based on status.
+- Trading behavior changes.
+- Scoring formula changes.
+- Risk policy changes.
+- Risk engine changes.
+- Execution risk-path changes.
+- Broker changes.
+- Hermes runtime wiring.
+- Live trading.
+- Alpaca calls.
+- External market data.
+- External LLM/API calls.
+- Options, margin, shorting, or sell proposals.
+
 Strategies:
 
 - SPY buy-and-hold

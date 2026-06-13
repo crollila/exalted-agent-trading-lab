@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.reporting.strategy_comparison import SCORE_EXPLANATION, SCORE_FORMULA
+from src.reporting.strategy_status import strategy_status_for
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,10 @@ def summarize_fixture_sweep(ranked_results_by_fixture: dict[str, list[dict]]) ->
     )
 
 
-def format_fixture_sweep(summary: FixtureSweepSummary) -> str:
+def format_fixture_sweep(
+    summary: FixtureSweepSummary,
+    status_by_strategy: dict[str, str] | None = None,
+) -> str:
     lines = [
         "Fixture Sweep Tournament",
         f"Score formula: {summary.score_formula}",
@@ -117,6 +121,7 @@ def format_fixture_sweep(summary: FixtureSweepSummary) -> str:
         _text_table(
             headers=(
                 "strategy ID",
+                "status",
                 "fixtures",
                 "wins",
                 "average score",
@@ -126,6 +131,7 @@ def format_fixture_sweep(summary: FixtureSweepSummary) -> str:
             rows=[
                 (
                     aggregate.strategy_id,
+                    strategy_status_for(aggregate.strategy_id, status_by_strategy),
                     str(aggregate.fixture_count),
                     str(aggregate.wins),
                     _score(aggregate.average_score),
@@ -149,6 +155,7 @@ def save_fixture_sweep_artifacts(
     summary: FixtureSweepSummary,
     output_dir: Path | str,
     generated_at: datetime | None = None,
+    status_by_strategy: dict[str, str] | None = None,
 ) -> FixtureSweepArtifactPaths:
     timestamp = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     timestamp_text = timestamp.isoformat()
@@ -169,6 +176,10 @@ def save_fixture_sweep_artifacts(
                 "score_formula": summary.score_formula,
                 "score_explanation": summary.score_explanation,
                 "overall_champion": _aggregate_to_dict(summary.overall_champion),
+                "strategy_statuses": {
+                    aggregate.strategy_id: strategy_status_for(aggregate.strategy_id, status_by_strategy)
+                    for aggregate in summary.strategy_aggregates
+                },
                 "per_fixture_winners": [
                     {
                         "fixture_name": winner.fixture_name,
@@ -196,6 +207,7 @@ def save_fixture_sweep_artifacts(
             "overall_champion",
             "fixture_name",
             "strategy_id",
+            "status",
             "score",
             "fixture_count",
             "wins",
@@ -213,6 +225,7 @@ def save_fixture_sweep_artifacts(
                     "overall_champion": summary.overall_champion.strategy_id,
                     "fixture_name": winner.fixture_name,
                     "strategy_id": winner.strategy_id,
+                    "status": strategy_status_for(winner.strategy_id, status_by_strategy),
                     "score": winner.score,
                 }
             )
@@ -222,6 +235,7 @@ def save_fixture_sweep_artifacts(
                     "row_type": "strategy_aggregate",
                     "sweep_timestamp": timestamp_text,
                     "overall_champion": summary.overall_champion.strategy_id,
+                    "status": strategy_status_for(aggregate.strategy_id, status_by_strategy),
                     **_aggregate_to_dict(aggregate),
                 }
             )
@@ -258,6 +272,7 @@ def save_fixture_sweep_artifacts(
                 _markdown_table(
                     headers=(
                         "Strategy ID",
+                        "Status",
                         "Fixtures",
                         "Wins",
                         "Average Score",
@@ -267,6 +282,7 @@ def save_fixture_sweep_artifacts(
                     rows=[
                         (
                             aggregate.strategy_id,
+                            strategy_status_for(aggregate.strategy_id, status_by_strategy),
                             str(aggregate.fixture_count),
                             str(aggregate.wins),
                             _score(aggregate.average_score),

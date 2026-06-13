@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6P strategy status registry completed.
+Phase 6Q status-aware research reports completed.
 
 Included:
 
@@ -78,6 +78,14 @@ Included:
 - `strategy-status` CLI command for printing current latest strategy statuses plus append-only history.
 - Strategy status entries include timestamp, strategy ID, status, reason, optional source note path, optional next action, and a safety reminder that the entry is research status only and not live trading approval.
 - Retired-strategy filtering for comparison/sweep execution was intentionally left as a TODO to avoid changing tournament behavior in this phase.
+- Status-aware report annotations read the latest local strategy statuses from `data/notes/strategy_status.md` when present.
+- Missing strategy statuses display as `unknown`.
+- `fixture-sweep` terminal output now includes strategy status in the robustness table.
+- `fixture-sweep --save` JSON, CSV, and Markdown artifacts include strategy status annotations.
+- `tournament-champion` terminal output includes the current champion strategy status.
+- `export-leaderboard` Markdown reports include champion status and strategy status in aggregate tables.
+- `export-fixture-sweep-leaderboard` Markdown reports include robust champion status and strategy status in aggregate tables.
+- Strategy status annotations do not filter, exclude, or change which strategies run.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -88,7 +96,7 @@ Included:
 - Run-linked portfolio snapshots, benchmark snapshots, trade proposals, risk decisions, orders, and daily reports.
 - `report` CLI command for beginner-readable SPY comparison metrics, defaulting to the latest run.
 - Explicit run-id reports via `python -m src.main report --run-id <id>`.
-- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, analysis notes, fixture sweep analysis notes, research decisions, strategy status registry, and performance.
+- Expanded tests for risk rules, validation, sizing, execution logging, approved quantities, mocked Alpaca paper integration, benchmark reporting, run-isolated reports, deterministic momentum behavior, cash-only behavior, local strategy comparison, deterministic multi-scenario simulation fixtures, comparison artifacts, Hermes fixture strategies, tournament history, tournament champion reporting, leaderboard export, fixture sweep, fixture sweep leaderboard export, status-aware reports, analysis notes, fixture sweep analysis notes, research decisions, strategy status registry, and performance.
 - Beginner docs.
 - Codex prompt workflow.
 
@@ -111,7 +119,7 @@ Current allowed mode:
 
 ## Next step
 
-Review Phase 6P strategy status registry, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
+Review Phase 6Q status-aware research reports, then continue with broader non-live tournament variants or explicit Hermes runtime prompting when ready.
 
 ## Project manager rule
 

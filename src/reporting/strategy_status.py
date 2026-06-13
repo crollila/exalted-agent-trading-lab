@@ -7,6 +7,7 @@ from pathlib import Path
 
 ALLOWED_STRATEGY_STATUSES = ("active", "promoted", "retest", "modified", "retired")
 DEFAULT_STRATEGY_STATUS_PATH = Path("data/notes/strategy_status.md")
+DEFAULT_UNKNOWN_STRATEGY_STATUS = "unknown"
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,24 @@ def read_strategy_status_registry(
         registry_path=active_registry_path,
         message=format_strategy_status_registry(entries=entries, registry_path=active_registry_path),
     )
+
+
+def load_latest_strategy_statuses(
+    registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
+) -> dict[str, str]:
+    active_registry_path = Path(registry_path)
+    if not active_registry_path.exists():
+        return {}
+
+    entries = parse_strategy_status_entries(active_registry_path.read_text(encoding="utf-8"))
+    return {
+        entry.strategy_id: entry.status
+        for entry in _latest_entries(entries)
+    }
+
+
+def strategy_status_for(strategy_id: str, statuses: dict[str, str] | None) -> str:
+    return (statuses or {}).get(strategy_id, DEFAULT_UNKNOWN_STRATEGY_STATUS)
 
 
 def format_strategy_status_entry(

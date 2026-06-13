@@ -26,6 +26,7 @@ from src.reporting.research_decisions import (
 from src.reporting.strategy_status import (
     ALLOWED_STRATEGY_STATUSES,
     DEFAULT_STRATEGY_STATUS_PATH,
+    load_latest_strategy_statuses,
     read_strategy_status_registry,
     set_strategy_status,
 )
@@ -190,9 +191,14 @@ def run_fixture_sweep(
         ranked_results_by_fixture[fixture] = rank_strategy_reports(reports)
 
     summary = summarize_fixture_sweep(ranked_results_by_fixture)
-    print(format_fixture_sweep(summary))
+    status_by_strategy = load_latest_strategy_statuses()
+    print(format_fixture_sweep(summary, status_by_strategy=status_by_strategy))
     if save:
-        artifacts = save_fixture_sweep_artifacts(summary=summary, output_dir=output_dir)
+        artifacts = save_fixture_sweep_artifacts(
+            summary=summary,
+            output_dir=output_dir,
+            status_by_strategy=status_by_strategy,
+        )
         print("Saved fixture sweep artifacts:")
         print(f"JSON: {artifacts.json_path}")
         print(f"CSV: {artifacts.csv_path}")
@@ -206,7 +212,13 @@ def run_tournament_history(output_dir: Path | str = Path("data/experiments")) ->
 
 def run_tournament_champion(output_dir: Path | str = Path("data/experiments")) -> None:
     champion = load_tournament_champion(output_dir)
-    print(format_tournament_champion(champion, output_dir=output_dir))
+    print(
+        format_tournament_champion(
+            champion,
+            output_dir=output_dir,
+            status_by_strategy=load_latest_strategy_statuses(),
+        )
+    )
 
 
 def run_export_leaderboard(

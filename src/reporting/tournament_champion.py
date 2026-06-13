@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.reporting.strategy_status import strategy_status_for
 from src.reporting.tournament_history import (
     TournamentHistoryEntry,
     TournamentHistoryResult,
@@ -64,7 +65,11 @@ def load_tournament_champion(output_dir: Path | str) -> TournamentChampionResult
     )
 
 
-def format_tournament_champion(result: TournamentChampionResult, output_dir: Path | str) -> str:
+def format_tournament_champion(
+    result: TournamentChampionResult,
+    output_dir: Path | str,
+    status_by_strategy: dict[str, str] | None = None,
+) -> str:
     lines = ["Tournament Champion", f"Artifact directory: {Path(output_dir)}"]
 
     if result.summary is None:
@@ -77,6 +82,7 @@ def format_tournament_champion(result: TournamentChampionResult, output_dir: Pat
         lines.extend(
             [
                 f"Champion strategy ID: {summary.champion_strategy_id}",
+                f"Champion strategy status: {strategy_status_for(summary.champion_strategy_id, status_by_strategy)}",
                 f"Valid tournaments reviewed: {summary.valid_tournaments_reviewed}",
                 f"Champion wins: {summary.champion_wins}",
                 f"Champion win rate: {_percent(summary.champion_win_rate)}",

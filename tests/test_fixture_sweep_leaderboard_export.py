@@ -50,8 +50,8 @@ def test_fixture_sweep_leaderboard_generates_report_with_multiple_artifacts(tmp_
     markdown = report_path.read_text(encoding="utf-8")
     assert result.saved
     assert "Valid sweeps reviewed: 2" in markdown
-    assert "| alpha | 2 | 2 | 100.00%" in markdown
-    assert "| beta | 2 | 2 | 100.00%" in markdown
+    assert "| alpha | unknown | 2 | 2 | 100.00%" in markdown
+    assert "| beta | unknown | 2 | 2 | 100.00%" in markdown
 
 
 def test_fixture_sweep_leaderboard_includes_champion_summary(tmp_path):
@@ -76,8 +76,8 @@ def test_fixture_sweep_leaderboard_includes_strategy_robustness_aggregate_table(
     markdown = _exported_markdown(tmp_path)
 
     assert "## Strategy Robustness Aggregates" in markdown
-    assert "| Strategy ID | Fixture Appearances | Fixture Wins | Win Rate | Average Score | Average Excess Return | Worst Max Drawdown |" in markdown
-    assert "| alpha | 2 | 2 | 100.00% | 0.0350 | 5.00% | -2.00% |" in markdown
+    assert "| Strategy ID | Status | Fixture Appearances | Fixture Wins | Win Rate | Average Score | Average Excess Return | Worst Max Drawdown |" in markdown
+    assert "| alpha | unknown | 2 | 2 | 100.00% | 0.0350 | 5.00% | -2.00% |" in markdown
 
 
 def test_fixture_sweep_leaderboard_includes_score_explanation(tmp_path):
