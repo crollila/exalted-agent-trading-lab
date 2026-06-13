@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.agents.hermes_strategy_sandbox import format_hermes_sandbox_result, load_hermes_sandbox_file
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
@@ -297,6 +298,13 @@ def run_export_short_simulation_report(
     print(result.message)
 
 
+def run_review_hermes_sandbox(file_path: Path | str) -> None:
+    result = load_hermes_sandbox_file(file_path)
+    print(format_hermes_sandbox_result(result))
+    if not result.ok:
+        raise SystemExit(1)
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -581,6 +589,16 @@ def main() -> None:
         default=DEFAULT_SHORT_SIMULATION_REPORT_PATH,
         help="Markdown report path. Defaults to data/reports/shorting_simulation_report.md.",
     )
+    hermes_sandbox_parser = subparsers.add_parser(
+        "review-hermes-sandbox",
+        help="Review strict local Hermes strategy sandbox JSON without execution",
+    )
+    hermes_sandbox_parser.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="Local Hermes strategy sandbox JSON file to review.",
+    )
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -732,6 +750,8 @@ def main() -> None:
         run_export_fixture_sweep_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
     elif args.command == "export-short-simulation-report":
         run_export_short_simulation_report(report_path=args.report_path)
+    elif args.command == "review-hermes-sandbox":
+        run_review_hermes_sandbox(file_path=args.file)
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
     elif args.command == "create-sweep-analysis-note":

@@ -11,7 +11,7 @@ This project is meant for research, review, and learning. It is not a live-money
 - SQLite-backed logging for proposals, risk decisions, orders, snapshots, runs, and benchmark reports.
 - Run-aware analytics that compare strategy performance against SPY.
 - Tournament-style strategy scoring, ranking, history review, champion selection, and Markdown leaderboard export.
-- Safe AI-agent boundaries: Hermes-shaped proposals are parser-only fixtures today, and no LLM can place or approve trades.
+- Safe AI-agent boundaries: Hermes-shaped proposals are parser-only fixtures or local sandbox reviews today, and no LLM can place or approve trades.
 - Testable Python design with mocked broker integration and local deterministic fixtures.
 
 ## Architecture
@@ -34,9 +34,9 @@ Current safety posture:
 - Dry-run is the default workflow.
 - Alpaca paper support exists only behind the project wrapper.
 - No live trading.
-- No options.
-- No margin.
-- No shorting.
+- No executable options.
+- No executable margin.
+- No executable shorting.
 - No LLM direct execution.
 - No real API keys in source.
 
@@ -51,6 +51,7 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Deterministic strategy comparison for local strategies.
 - Multi-scenario local fixtures for non-zero return, SPY return, excess return, and drawdown examples.
 - Hermes parser-only fixture strategies using hardcoded local JSON.
+- Hermes multi-agent strategy sandbox router for strict local JSON review of stock, short, option, margin, and rejected ideas.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
 - Tournament champion report across saved ranked tournaments.
@@ -154,6 +155,12 @@ python -m src.main export-short-simulation-report
 python -m src.main export-short-simulation-report --report-path data/reports/shorting_simulation_report.md
 ```
 
+Review a local Hermes sandbox proposal file:
+
+```bash
+python -m src.main review-hermes-sandbox --file docs/examples/hermes_strategy_sandbox_example.json
+```
+
 Create a human analysis note from the latest valid tournament artifact:
 
 ```bash
@@ -220,6 +227,8 @@ Use `--include-hermes-fixtures` to add parser-only local Hermes JSON fixture str
 
 These fixtures do not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any network service. They only feed local Hermes-shaped JSON through the strict parser to create `TradeProposal` objects, then the normal risk engine decides what is approved.
 
+Use `review-hermes-sandbox` to inspect strict local JSON from a future Hermes multi-agent team without approving execution. The router classifies `stock_long` as `paper_eligible_stock_long`, `short_stock` as `simulation_only_short`, `option_long` as `simulation_only_option`, `margin` as `simulation_only_margin`, and unknown or malformed proposals as `rejected`. The command does not call Alpaca, Hermes, LLMs, market data, or any broker, and it does not write orders or change portfolio state.
+
 Use `--save` to write durable local research artifacts under `data/experiments` by default:
 
 - JSON for machine-readable review.
@@ -257,7 +266,9 @@ Phase 6W adds inert options contract, proposal, and risk input models for future
 
 Phase 6X adds a local-only options simulator foundation for deterministic premium inputs. It is not connected to normal strategies, the existing risk engine, the order executor, Alpaca, or Hermes runtime.
 
-Current behavior remains stock-only, long-only, cash-only, no options, no margin, no shorting, no live trading, and no LLM direct execution.
+Phase 7A adds a Hermes multi-agent strategy sandbox router for local JSON review only. Hermes can propose advanced ideas, but the router cannot place orders, approve execution, call brokers, call LLMs, or bypass risk controls.
+
+Current executable behavior remains stock-only, long-only, cash-only, no executable options, no executable margin, no executable shorting, no live trading, and no LLM direct execution.
 
 ## Portfolio note
 

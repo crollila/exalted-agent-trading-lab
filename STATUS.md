@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 6X options dry-run simulator foundation completed.
+Phase 7A Hermes multi-agent strategy sandbox router completed.
 
 Included:
 
@@ -151,6 +151,18 @@ Included:
 - Tests prove the executable risk engine still rejects options.
 - Phase 6X does not add a CLI command and does not write runtime artifacts.
 - Phase 6X does not enable options execution, executable shorting, margin, broker calls, Alpaca options calls, order execution changes, risk engine behavior changes, live trading, strategy options integration, or Hermes runtime wiring.
+- Hermes multi-agent strategy sandbox router was added for strict local JSON review.
+- `src/agents/hermes_strategy_sandbox.py` defines `HermesSandboxRequest`, `RoutedHermesProposal`, and `HermesSandboxResult`.
+- Sandbox requests require `agent_id`, `team_id`, `strategy_id`, `agent_role`, and a non-empty `proposals` list, with optional `strategy_notes` and `learning_goal`.
+- Sandbox proposal routing maps `stock_long` to existing `TradeProposal` objects with route `paper_eligible_stock_long`.
+- Sandbox proposal routing maps `short_stock` to existing inert `ShortProposal` objects with route `simulation_only_short`.
+- Sandbox proposal routing maps `option_long` to existing inert `OptionProposal` objects with route `simulation_only_option`.
+- Sandbox proposal routing maps strict margin placeholders to `simulation_only_margin`.
+- Invalid JSON, missing required request fields, empty proposals, unknown proposal types, malformed stock/short/option proposals, and extra fields are rejected.
+- `review-hermes-sandbox --file` reads a local JSON file only and prints team ID, agent ID, strategy ID, route summary counts, proposal routes, and the warning that Hermes proposals are not execution approval.
+- Example local sandbox payload was added at `docs/examples/hermes_strategy_sandbox_example.json`.
+- Phase 7A does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
+- Phase 7A does not submit or write orders, change portfolio state, enable advanced execution, weaken risk policy, or allow broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -188,10 +200,11 @@ Current allowed mode:
 - Phase 6V adds local-only shorting simulation report export only; it does not change current trading permissions or risk limits.
 - Phase 6W adds inert options design models only; it does not change current trading permissions or risk limits.
 - Phase 6X adds local-only options simulation foundations only; it does not change current trading permissions or risk limits.
+- Phase 7A adds local-only Hermes sandbox review only; Hermes can propose advanced ideas, but the review command cannot place orders directly, call Alpaca, call LLMs, call brokers, enable live trading, or bypass broker/order/risk controls.
 
 ## Next step
 
-Review Phase 6X options dry-run simulator foundation, then consider later permission-gated report/export work only after explicit approval.
+Review Phase 7A Hermes sandbox router output, then consider later permission-gated simulation/report work only after explicit approval.
 
 ## Project manager rule
 

@@ -858,7 +858,39 @@ Status: planned, not implemented.
 
 Goal: simulate margin exposure and forced deleveraging locally after design and tests, with no broker calls.
 
-### Future Phase 7A - Advanced broker-paper implementation gate
+### Phase 7A - Hermes multi-agent strategy sandbox router
+
+Status: complete for local-only sandbox review.
+
+Goal: let Hermes-style agents propose advanced ideas while the lab routes each idea into a safe non-executing lane.
+
+Included:
+
+- New local-only sandbox module at `src/agents/hermes_strategy_sandbox.py`.
+- Strict top-level request model with `agent_id`, `team_id`, `strategy_id`, `agent_role`, `proposals`, and optional `strategy_notes` and `learning_goal`.
+- Strict proposal routing for `stock_long`, `short_stock`, `option_long`, and `margin`.
+- `stock_long` maps to the existing `TradeProposal` model and routes to `paper_eligible_stock_long`.
+- `short_stock` maps to the existing inert `ShortProposal` model and routes to `simulation_only_short`.
+- `option_long` maps to the existing inert `OptionProposal` model and routes to `simulation_only_option`.
+- `margin` maps to a strict simulation-only placeholder and routes to `simulation_only_margin`.
+- Invalid JSON, missing required request fields, empty proposals, unknown proposal types, malformed stock/short/option proposals, and forbidden extra fields are rejected.
+- `review-hermes-sandbox --file` CLI command reads strict local JSON and prints team, agent, strategy, route counts, proposal routes, and the warning that Hermes proposals are not execution approval.
+- Example mixed payload at `docs/examples/hermes_strategy_sandbox_example.json`.
+- Tests cover valid mixed parsing, route mapping, unknown type rejection, malformed advanced proposals, CLI operation without credentials, and no Alpaca/settings/database calls from review.
+
+Not included:
+
+- Hermes runtime wiring.
+- Real LLM/API calls.
+- Alpaca calls from review.
+- Broker calls.
+- Order submission or order writes.
+- Portfolio state changes.
+- Live trading.
+- Real options, short, or margin broker execution.
+- Risk bypasses.
+
+### Future Phase 7B - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 

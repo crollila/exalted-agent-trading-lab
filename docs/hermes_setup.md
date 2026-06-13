@@ -2,7 +2,7 @@
 
 Hermes runtime integration remains disabled.
 
-The repo can validate strict Hermes-shaped JSON and convert valid local payloads into `TradeProposal` objects. It does not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any broker.
+The repo can validate strict Hermes-shaped JSON and convert valid local payloads into reviewable proposal objects. It does not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any broker.
 
 ## Role of Hermes
 
@@ -40,6 +40,30 @@ Run them in local comparison with:
 python -m src.main compare-strategies --include-hermes-fixtures
 python -m src.main compare-strategies --fixture multi_day --include-hermes-fixtures --save
 ```
+
+Phase 7A adds a local Hermes multi-agent strategy sandbox router:
+
+```text
+Strict local Hermes JSON -> sandbox router -> route summary only
+```
+
+Hermes agents may propose stock longs, shorts, options, margin ideas, or invalid experimental ideas in strict local JSON. The sandbox classifies them without approving execution:
+
+- `stock_long` -> `paper_eligible_stock_long`
+- `short_stock` -> `simulation_only_short`
+- `option_long` -> `simulation_only_option`
+- `margin` -> `simulation_only_margin`
+- unknown or malformed proposals -> `rejected`
+
+Review a local sandbox file with:
+
+```bash
+python -m src.main review-hermes-sandbox --file docs/examples/hermes_strategy_sandbox_example.json
+```
+
+The review command reads a local JSON file only. It does not initialize the database, call Alpaca, call Hermes, call an LLM, fetch network data, submit orders, write orders, or change portfolio state. Its output states that Hermes proposals are not execution approval.
+
+Hermes runtime remains disabled. A future Hermes process, if added, must output strict local JSON for human/Codex review and must not receive broker credentials, Alpaca access, API keys, or direct order authority.
 
 ## Parser requirements
 
