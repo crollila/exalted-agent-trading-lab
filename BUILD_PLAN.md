@@ -951,7 +951,36 @@ Not included:
 - Trading permission changes.
 - Risk bypasses.
 
-### Future Phase 7D - Advanced broker-paper implementation gate
+### Phase 7D - Hermes runtime adapter
+
+Status: complete for opt-in local/OpenAI-compatible proposal generation.
+
+Goal: allow a configured Hermes-compatible chat endpoint to generate strict sandbox proposal JSON files, then save and validate them locally.
+
+Included:
+
+- New runtime adapter at `src/agents/hermes_runtime.py`.
+- Strict `HermesRuntimeConfig`, `HermesGenerationRequest`, and `HermesGenerationResult` models.
+- Runtime refuses unless `HERMES_ENABLED=true`.
+- Runtime requires `HERMES_BASE_URL` and `HERMES_MODEL`.
+- Supports generic OpenAI-compatible `/chat/completions` calls with optional `HERMES_API_KEY` and configurable timeout.
+- Prompt builder requires JSON-only output matching the Hermes sandbox schema.
+- Prompt explicitly bans secrets, execution claims, broker access, and prose/Markdown outside JSON.
+- `hermes-generate-proposals` CLI writes raw generated JSON to a local output file, creates the output directory, validates the saved file through the sandbox router, and prints the route summary.
+- Tests mock HTTP completely and require no real Hermes endpoint, real LLM, network, credentials, Alpaca, or broker access.
+
+Not included:
+
+- Live trading.
+- Real order execution.
+- Alpaca calls.
+- Broker calls.
+- Broker credential access.
+- Runtime Hermes order authority.
+- Risk bypasses.
+- Automatic tournament submission.
+
+### Future Phase 7E - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 

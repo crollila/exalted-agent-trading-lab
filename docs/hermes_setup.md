@@ -1,8 +1,8 @@
 # Hermes Setup
 
-Hermes runtime integration remains disabled.
+Hermes runtime integration is disabled by default and must be explicitly enabled before any local generation call.
 
-The repo can validate strict Hermes-shaped JSON and convert valid local payloads into reviewable proposal objects. It does not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any broker.
+The repo can validate strict Hermes-shaped JSON and convert valid local payloads into reviewable proposal objects. By default it does not call Hermes, Ollama, LM Studio, hosted LLM APIs, Alpaca, or any broker.
 
 ## Role of Hermes
 
@@ -79,7 +79,31 @@ python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_
 
 Tournament rounds load local files, route proposals through the sandbox router, score teams by routing counts, and rank teams deterministically. The score is routing score only, not profitability, trading approval, broker readiness, or risk approval. With `--save`, artifacts are local ignored research outputs under `data/experiments` by default.
 
-Hermes runtime remains disabled. A future Hermes process, if added, must output strict local JSON for human/Codex review and must not receive broker credentials, Alpaca access, API keys, or direct order authority.
+Phase 7D adds an opt-in Hermes runtime adapter. Configure only a local or OpenAI-compatible Hermes endpoint:
+
+```bash
+set HERMES_ENABLED=true
+set HERMES_BASE_URL=http://127.0.0.1:11434/v1
+set HERMES_MODEL=<model>
+set HERMES_API_KEY=dummy-local-key
+```
+
+Then generate a local proposal file:
+
+```bash
+python -m src.main hermes-generate-proposals --team-id team_alpha --agent-id alpha_research_01 --agent-role research_agent --strategy-id team_alpha_runtime_v1 --output-file data/agent_runs/team_alpha_runtime_v1.json
+```
+
+The generation command writes raw Hermes JSON locally, validates it with the sandbox router, and prints route counts. Generated files under `data/agent_runs` are ignored runtime artifacts.
+
+Review and route generated files with:
+
+```bash
+python -m src.main review-hermes-sandbox --file data/agent_runs/team_alpha_runtime_v1.json
+python -m src.main hermes-tournament-round --registry docs/examples/hermes_team_registry_example.json --proposal data/agent_runs/team_alpha_runtime_v1.json
+```
+
+The runtime prompt requires strict JSON only. It bans secrets, execution claims, broker credentials, order placement language, live trading, Markdown, and prose outside JSON. Hermes output remains proposal JSON for paper/simulation routing only. It must not receive broker credentials, Alpaca access, real API keys, or direct order authority.
 
 ## Parser requirements
 

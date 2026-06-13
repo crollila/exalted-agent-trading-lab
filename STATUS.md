@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 7C Hermes tournament round runner completed.
+Phase 7D Hermes runtime adapter completed.
 
 Included:
 
@@ -185,6 +185,16 @@ Included:
 - A second local proposal example was added at `docs/examples/hermes_strategy_sandbox_team_beta_example.json`.
 - Phase 7C does not call Hermes, LLM APIs, Alpaca, brokers, market data, or network services.
 - Phase 7C does not submit or write orders, change portfolio state, enable advanced execution, score profitability, weaken risk policy, or allow broker/order/risk bypasses.
+- Hermes runtime adapter was added for opt-in proposal JSON generation through a local/OpenAI-compatible chat endpoint.
+- `src/agents/hermes_runtime.py` defines `HermesRuntimeConfig`, `HermesGenerationRequest`, and `HermesGenerationResult`.
+- Runtime configuration uses only `HERMES_ENABLED`, `HERMES_BASE_URL`, `HERMES_MODEL`, optional `HERMES_API_KEY`, and optional `HERMES_TIMEOUT_SECONDS`.
+- Runtime refuses unless `HERMES_ENABLED=true`, and fails clearly when base URL or model is missing.
+- Runtime calls only generic OpenAI-compatible `/chat/completions`, saves the returned raw JSON locally, then validates the saved file through the existing Hermes sandbox router.
+- The generation prompt requires strict JSON matching the sandbox schema and bans secrets, execution claims, broker credentials, order placement, live trading, Markdown, and prose outside JSON.
+- `hermes-generate-proposals` CLI creates the output directory, saves raw generated proposal JSON, prints the sandbox route summary, and treats Hermes output as proposal JSON only.
+- `data/agent_runs/` is ignored for local generated proposal files.
+- Runtime tests mock HTTP completely and require no real Hermes endpoint, real LLM, network, credentials, Alpaca, or broker access.
+- Phase 7D does not call Alpaca, submit orders, write orders, change portfolio state, enable live trading, grant Hermes broker access, or allow broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -225,10 +235,11 @@ Current allowed mode:
 - Phase 7A adds local-only Hermes sandbox review only; Hermes can propose advanced ideas, but the review command cannot place orders directly, call Alpaca, call LLMs, call brokers, enable live trading, or bypass broker/order/risk controls.
 - Phase 7B adds local-only Hermes team registry review only; agent identities, roles, and learning notes do not grant broker, order, LLM, Alpaca, or execution authority.
 - Phase 7C adds local-only Hermes tournament round route scoring only; tournament winners are based on proposal routing counts, not profitability or trading approval.
+- Phase 7D adds opt-in Hermes proposal generation only; generated output is local sandbox JSON and must still pass local review/routing before any research use.
 
 ## Next step
 
-Review Phase 7C Hermes tournament round outputs, then consider later saved-round history or learning-note feedback only after explicit approval.
+Review Phase 7D Hermes runtime adapter with a configured local endpoint only when explicitly enabled, then feed generated files through sandbox review and tournament routing.
 
 ## Project manager rule
 

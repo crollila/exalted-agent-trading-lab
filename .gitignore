@@ -5,6 +5,7 @@ __pycache__/
 data/*.sqlite3
 data/*.db
 data/experiments/
+data/agent_runs/
 data/reports/
 data/notes/
 *.pyc

@@ -10,6 +10,12 @@ from src.agents.hermes_tournament_round import (
     run_hermes_tournament_round,
     save_hermes_tournament_round_artifacts,
 )
+from src.agents.hermes_runtime import (
+    HermesGenerationRequest,
+    HermesRuntimeConfig,
+    format_hermes_generation_result,
+    generate_hermes_proposals,
+)
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.config.settings import Settings
 from src.db.database import initialize_database
@@ -344,6 +350,35 @@ def run_hermes_tournament_round_cli(
         print(f"Markdown: {artifacts.markdown_path}")
 
 
+def run_hermes_generate_proposals_cli(
+    team_id: str,
+    agent_id: str,
+    agent_role: str,
+    strategy_id: str,
+    output_file: Path | str,
+    learning_goal: str | None = None,
+    strategy_notes: str | None = None,
+) -> None:
+    try:
+        result = generate_hermes_proposals(
+            config=HermesRuntimeConfig.from_env(),
+            request=HermesGenerationRequest(
+                team_id=team_id,
+                agent_id=agent_id,
+                agent_role=agent_role,
+                strategy_id=strategy_id,
+                learning_goal=learning_goal,
+                strategy_notes=strategy_notes,
+            ),
+            output_file=output_file,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"Hermes proposal generation unavailable: {exc}")
+        raise SystemExit(1) from exc
+
+    print(format_hermes_generation_result(result))
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -675,6 +710,22 @@ def main() -> None:
         default=Path("data/experiments"),
         help="Directory for saved tournament artifacts. Defaults to data/experiments.",
     )
+    hermes_generate_parser = subparsers.add_parser(
+        "hermes-generate-proposals",
+        help="Generate strict local Hermes sandbox proposal JSON through an opt-in runtime endpoint",
+    )
+    hermes_generate_parser.add_argument("--team-id", required=True, help="Hermes team ID for the generated file.")
+    hermes_generate_parser.add_argument("--agent-id", required=True, help="Hermes agent ID for the generated file.")
+    hermes_generate_parser.add_argument("--agent-role", required=True, help="Hermes agent role for the generated file.")
+    hermes_generate_parser.add_argument("--strategy-id", required=True, help="Strategy ID for the generated file.")
+    hermes_generate_parser.add_argument(
+        "--output-file",
+        type=Path,
+        required=True,
+        help="Local file path for the raw generated Hermes JSON.",
+    )
+    hermes_generate_parser.add_argument("--learning-goal", help="Optional runtime learning goal.")
+    hermes_generate_parser.add_argument("--strategy-notes", help="Optional runtime strategy notes.")
     analysis_note_parser = subparsers.add_parser(
         "create-analysis-note",
         help="Create a Markdown human review note from the latest saved ranked tournament",
@@ -841,6 +892,16 @@ def main() -> None:
             proposal_paths=proposal_paths,
             save=args.save,
             output_dir=args.output_dir,
+        )
+    elif args.command == "hermes-generate-proposals":
+        run_hermes_generate_proposals_cli(
+            team_id=args.team_id,
+            agent_id=args.agent_id,
+            agent_role=args.agent_role,
+            strategy_id=args.strategy_id,
+            output_file=args.output_file,
+            learning_goal=args.learning_goal,
+            strategy_notes=args.strategy_notes,
         )
     elif args.command == "create-analysis-note":
         run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
