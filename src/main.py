@@ -12,6 +12,7 @@ from src.agents.hermes_tournament_round import (
     run_hermes_tournament_round,
     save_hermes_tournament_round_artifacts,
 )
+from src.agents.llm_provider import LLMProviderConfig
 from src.agents.hermes_runtime import (
     HermesGenerationRequest,
     HermesRuntimeConfig,
@@ -19,8 +20,35 @@ from src.agents.hermes_runtime import (
     generate_hermes_proposals,
 )
 from src.brokers.alpaca_client import AlpacaClientWrapper
+from src.brokers.options_adapter import OptionsExecutionAdapter
+from src.brokers.paper_auth import (
+    CREDENTIAL_SOURCES,
+    OK,
+    client_for_source,
+    diagnose_all,
+    diagnose_source,
+)
+from src.competition.risk_engine import AccountContext
+from src.competition.scorecard import (
+    export_scorecards_markdown,
+    load_latest_scorecard,
+)
+from src.competition.week_competition import (
+    WEEK_TEAMS,
+    competition_status,
+    run_week_cycle,
+    start_week_competition,
+    stop_week_competition,
+)
+from src.config.permissions import TradingPermissions
 from src.config.settings import Settings
 from src.db.database import initialize_database
+from src.learning.team_memory import TeamLearningLedger
+from src.safety.kill_switch import (
+    disengage as kill_switch_disengage,
+    engage as kill_switch_engage,
+    read_kill_switch,
+)
 from src.execution.local_runner import SIMULATION_FIXTURES, run_strategy_dry_run
 from src.reporting.analysis_notes import create_strategy_analysis_note
 from src.reporting.fixture_sweep import (
@@ -116,23 +144,296 @@ def run_dry_run(strategy_name: str = "spy_buy_hold") -> None:
     )
 
 
-def run_paper_status() -> None:
+_SOURCE_LABELS = {
+    "global": "ALPACA_API_KEY / ALPACA_SECRET_KEY",
+    "team_alpha": "TEAM_ALPHA_ALPACA_API_KEY / TEAM_ALPHA_ALPACA_SECRET_KEY",
+    "team_beta": "TEAM_BETA_ALPACA_API_KEY / TEAM_BETA_ALPACA_SECRET_KEY",
+}
+
+
+def run_paper_status(team: str = "global") -> None:
+    if team not in CREDENTIAL_SOURCES:
+        print(f"Unknown --team '{team}'. Use one of: {', '.join(CREDENTIAL_SOURCES)}.")
+        raise SystemExit(1)
+
+    permissions = TradingPermissions.from_env()
+
+    print("=== Paper trading permissions (paper-only; no live trading) ===")
+    summary = permissions.summary()
+    print(f"TRADING_MODE: {summary['trading_mode']} (is_paper={summary['is_paper']})")
+    print(f"Level 1 paper stocks: {'ENABLED' if summary['paper_stocks'] else 'disabled'}")
+    print(f"Level 2 paper shorting: {'ENABLED' if summary['paper_shorting'] else 'disabled'}")
+    print(f"Level 3 paper margin: {'ENABLED' if summary['paper_margin'] else 'disabled'}")
+    print(f"Level 4 paper options: {'ENABLED' if summary['paper_options'] else 'disabled'}")
+    print(read_kill_switch().describe())
+    print("")
+
+    print(f"=== Account status for credential source: {team} ===")
+    print(f"Using credential pair: {_SOURCE_LABELS[team]}")
+    diagnosis = diagnose_source(team)
+    if not diagnosis.auth_ok:
+        print(f"Account status: unavailable ({diagnosis.classification}: {diagnosis.message})")
+        if team == "global":
+            # Reassure the operator: global being blocked does not block the teams.
+            for source in ("team_alpha", "team_beta"):
+                team_diag = diagnose_source(source)
+                state = "OK" if team_diag.auth_ok else f"{team_diag.classification}"
+                print(f"  {source} auth: {state}")
+            print("Note: only the selected source is shown above; team competition uses team credentials.")
+        return
+
+    account = diagnosis.account or {}
+    print(f"Account equity: {account.get('equity')}")
+    print(f"Cash: {account.get('cash')}")
+    print(f"Buying power: {account.get('buying_power')}")
+
+
+def _account_context_for_source(source: str, settings: Settings) -> "AccountContext":
+    """Build a deterministic AccountContext from a specific credential source.
+
+    Team sources never fall back to global keys. If the source's account is
+    unavailable, fall back to a deterministic STARTING_EQUITY context (no global
+    credentials are ever used for a team).
+    """
+
+    diagnosis = diagnose_source(source, base_settings=settings)
+    if diagnosis.auth_ok and diagnosis.account:
+        try:
+            return AccountContext(
+                equity=float(diagnosis.account["equity"]),
+                cash=float(diagnosis.account["cash"]),
+                buying_power=float(diagnosis.account["buying_power"]),
+            )
+        except (TypeError, ValueError, KeyError):
+            pass
+    print(
+        f"({source} account unavailable: {diagnosis.classification}; "
+        "using deterministic STARTING_EQUITY context.)"
+    )
+    return AccountContext(
+        equity=settings.starting_equity,
+        cash=settings.starting_equity,
+        buying_power=settings.starting_equity * 2.0,
+    )
+
+
+def run_start_week_competition() -> None:
     settings = Settings.from_env()
+    state = start_week_competition(starting_equity=settings.starting_equity)
+    print("Started Alpha vs Beta weekly paper competition (paper-only).")
+    print(f"Week start: {state.week_start}")
+    print(f"Week end: {state.week_end}")
+    print(f"Teams: {', '.join(state.teams)}")
 
-    try:
-        client = AlpacaClientWrapper(settings=settings)
-        account = client.get_account()
-        positions = client.get_positions()
-        market_open = client.is_market_open()
-    except (RuntimeError, ValueError) as exc:
-        print(f"Paper status unavailable: {exc}")
-        raise SystemExit(1) from exc
 
-    print(f"Account equity: {_read_value(account, 'equity')}")
-    print(f"Cash: {_read_value(account, 'cash')}")
-    print(f"Buying power: {_read_value(account, 'buying_power')}")
-    print(f"Market status: {'open' if market_open else 'closed'}")
-    print(f"Positions count: {len(positions)}")
+def run_week_cycle_cli(team: str) -> None:
+    settings = Settings.from_env()
+    permissions = TradingPermissions.from_env()
+    # Account context uses the TEAM's own credentials only — never global.
+    account = _account_context_for_source(team, settings)
+    ks = read_kill_switch()
+    if ks.engaged:
+        print(ks.describe())
+
+    # Only build a real broker client for genuine (non-dry-run) paper submission,
+    # bound strictly to the team's own credential source (no global fallback).
+    client = None
+    if not settings.dry_run and not ks.engaged:
+        try:
+            client = client_for_source(team, base_settings=settings)
+        except Exception as exc:  # noqa: BLE001 - missing/invalid team creds run without live submission
+            print(f"(Team broker unavailable: {exc}; running without live submission.)")
+            client = None
+
+    result = run_week_cycle(
+        team,
+        permissions=permissions,
+        account=account,
+        client=client,
+        dry_run=settings.dry_run,
+    )
+    print(f"Ran week cycle for {team} (dry_run={settings.dry_run}).")
+    for line in result.stage_log:
+        print(f"  {line}")
+    print(f"Routing: {result.routing.summary()}")
+    print(f"Orders submitted: {sum(1 for r in result.execution_records if r.submitted)}")
+    for record in result.execution_records:
+        print(f"  - {record.symbol} [{record.proposal_type}]: {record.detail}")
+
+
+def run_week_competition_status() -> None:
+    status = competition_status()
+    print("=== Alpha vs Beta weekly competition status (paper-only) ===")
+    print(f"Active: {status['active']}")
+    print(f"Week start: {status['week_start']}")
+    print(f"Week end: {status['week_end']}")
+    teams = status["teams"]
+    if not teams:
+        print("No team scorecards yet. Run: python -m src.main run-week-cycle --team team_alpha")
+        return
+    for card in teams:
+        spy = card.get("spy_benchmark_return")
+        excess = card.get("excess_return_vs_spy")
+        spy_text = "unknown" if spy is None else f"{spy:.4f}"
+        excess_text = "unknown" if excess is None else f"{excess:.4f}"
+        starting = card.get("starting_equity") or 0.0
+        team_return = (card["current_equity"] - starting) / starting if starting else 0.0
+        print(
+            f"#{card.get('current_rank')} {card['team_id']}: return={team_return:.4f} "
+            f"equity={card['current_equity']:.2f} SPY={spy_text} excessVsSPY={excess_text} "
+            f"orders={card['orders_submitted']} approved={card['approved_count']} "
+            f"sim_only={card['simulation_only_count']} rejected={card['rejected_count']}"
+        )
+
+
+def run_stop_week_competition() -> None:
+    state = stop_week_competition()
+    print(f"Stopped weekly competition. Stopped at: {state.stopped_at}")
+
+
+def run_team_learning_status(team: str) -> None:
+    ledger = TeamLearningLedger.load(team)
+    print(f"=== Team learning ledger: {team} ===")
+    print(f"Current hypothesis: {ledger.current_hypothesis or '(none)'}")
+    print(f"Active strategy: {ledger.active_strategy or '(none)'}")
+    print(f"Watchlist: {', '.join(ledger.watchlist) or '(none)'}")
+    print(f"Lessons learned ({len(ledger.lessons_learned)}):")
+    for lesson in ledger.latest_lessons(10):
+        print(f"  - {lesson}")
+    print(f"Strategy changes ({len(ledger.strategy_changes)}):")
+    for change in ledger.strategy_changes[-10:]:
+        print(f"  - {change}")
+    print(f"Risk notes ({len(ledger.risk_notes)}):")
+    for note in ledger.risk_notes[-10:]:
+        print(f"  - {note}")
+    print(f"Cycles recorded: {len(ledger.reviews)}")
+
+
+def run_export_team_scorecards(
+    report_path: Path | str = Path("data/reports/team_scorecards.md"),
+) -> None:
+    cards = []
+    for team in WEEK_TEAMS:
+        card = load_latest_scorecard(team)
+        if card is not None:
+            cards.append(card)
+    if not cards:
+        print("No team scorecards to export yet.")
+        return
+    path = export_scorecards_markdown(cards, report_path)
+    print(f"Exported team scorecards to {path}")
+
+
+def run_kill_switch_on(reason: str | None = None) -> None:
+    state = kill_switch_engage(reason=reason)
+    print("Kill switch ENGAGED. All new broker submissions are blocked.")
+    print(state.describe())
+
+
+def run_kill_switch_off() -> None:
+    kill_switch_disengage()
+    print("Kill switch disengaged. Broker submissions follow normal gates.")
+
+
+def run_kill_switch_status() -> None:
+    print(read_kill_switch().describe())
+
+
+def run_paper_permissions() -> None:
+    permissions = TradingPermissions.from_env()
+    import json as _json
+
+    print(_json.dumps(permissions.summary(), indent=2))
+
+
+def run_alpaca_auth_diagnose() -> None:
+    from dotenv import find_dotenv
+
+    dotenv_path = find_dotenv(usecwd=True)
+    print("=== Alpaca auth diagnostics (paper-only; secrets never printed) ===")
+    print(f".env loaded: {'yes' if dotenv_path else 'no'}" + (f" ({dotenv_path})" if dotenv_path else ""))
+    print("")
+
+    diagnoses = diagnose_all()
+    for source in CREDENTIAL_SOURCES:
+        d = diagnoses[source]
+        print(f"[{source}] credential pair: {_SOURCE_LABELS[source]}")
+        print(f"  api key present: {d.api_key_present} (length {d.api_key_length})")
+        print(f"  secret present: {d.secret_present} (length {d.secret_length})")
+        print(f"  ALPACA_PAPER valid (true): {d.paper_valid}")
+        print(f"  base URL valid (paper endpoint): {d.base_url_valid}")
+        print(f"  auth status: {'OK' if d.auth_ok else 'FAILED'}")
+        print(f"  classification: {d.classification}")
+        print(f"  detail: {d.message}")
+        print("")
+
+
+def _readiness_can_submit(source_diag, ks_engaged: bool, is_paper: bool) -> tuple[bool, list[str]]:
+    blockers: list[str] = []
+    if not source_diag.auth_ok:
+        blockers.append(f"{source_diag.source} Alpaca auth failed ({source_diag.classification})")
+    if ks_engaged:
+        blockers.append("kill switch engaged")
+    if not is_paper:
+        blockers.append("TRADING_MODE is not paper")
+    return (len(blockers) == 0, blockers)
+
+
+def run_competition_readiness_check() -> None:
+    settings = Settings.from_env()
+    permissions = TradingPermissions.from_env()
+    ks = read_kill_switch()
+    summary = permissions.summary()
+    provider_config = LLMProviderConfig.from_env()
+    provider_key_set = {
+        "openai": bool(provider_config.openai_api_key),
+        "anthropic": bool(provider_config.anthropic_api_key),
+        "ollama": True,  # local, no hosted key required
+    }.get(provider_config.provider, False)
+
+    diagnoses = diagnose_all(base_settings=settings)
+    options_adapter_configured = OptionsExecutionAdapter().configured
+
+    print("=== Competition readiness check (paper-only) ===")
+    print(f"Kill switch: {'ENGAGED' if ks.engaged else 'disengaged'}")
+    print(f"TRADING_MODE: {summary['trading_mode']} (is_paper={summary['is_paper']})")
+    print(f"DRY_RUN: {settings.dry_run}")
+    paper_endpoint_valid = settings.alpaca_base_url in ("", "https://paper-api.alpaca.markets")
+    print(f"Paper endpoint valid: {settings.alpaca_base_url or '(unset)'}")
+    print("")
+    print("Paper permissions:")
+    print(f"  L1 stocks: {summary['paper_stocks']}")
+    print(f"  L2 shorting: {summary['paper_shorting']}")
+    print(f"  L3 margin: {summary['paper_margin']}")
+    print(f"  L4 options: {summary['paper_options']}")
+    print(f"  allow naked options: {summary['allow_naked_options']}")
+    print(f"Advanced caps: {summary['caps']}")
+    print(f"Options execution adapter: {'configured' if options_adapter_configured else 'not configured (options execution will refuse)'}")
+    print(f"LLM provider selected: {provider_config.provider}")
+    print(f"LLM provider key configured: {provider_key_set}")
+    print("")
+
+    for source in CREDENTIAL_SOURCES:
+        d = diagnoses[source]
+        print(f"{source} Alpaca auth: {'OK' if d.auth_ok else d.classification}")
+    print("")
+
+    is_paper = bool(summary["is_paper"])
+    for team in ("team_alpha", "team_beta"):
+        can_submit, blockers = _readiness_can_submit(diagnoses[team], ks.engaged, is_paper)
+        label = "Team Alpha" if team == "team_alpha" else "Team Beta"
+        print(f"{label} can submit paper orders: {can_submit}")
+        if blockers:
+            print(f"  blockers: {', '.join(blockers)}")
+        elif settings.dry_run:
+            print("  note: DRY_RUN is true, so cycles route/log orders but do not submit. Set DRY_RUN=false to submit.")
+
+    if not diagnoses["global"].auth_ok:
+        print("")
+        print(
+            "Note: global Alpaca credentials are not authenticated, but this does NOT block "
+            "Team Alpha or Team Beta. Each team uses its own credentials."
+        )
 
 
 def _read_value(obj: object, name: str) -> object:
@@ -544,7 +845,13 @@ def main() -> None:
         default="spy_buy_hold",
         help="Local deterministic strategy to run. Defaults to spy_buy_hold.",
     )
-    subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
+    paper_status_parser = subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
+    paper_status_parser.add_argument(
+        "--team",
+        choices=CREDENTIAL_SOURCES,
+        default="global",
+        help="Credential source: global, team_alpha, or team_beta. Defaults to global.",
+    )
     report_parser = subparsers.add_parser("report", help="Generate a local benchmark report")
     report_parser.add_argument(
         "--run-id",
@@ -892,6 +1199,35 @@ def main() -> None:
         help="Launch the optional desktop-style app window around the Streamlit dashboard",
     )
 
+    # --- Weekly competition + advanced paper-trading controls (paper-only) ---
+    subparsers.add_parser("paper-permissions", help="Show current paper permission levels and risk caps")
+    subparsers.add_parser(
+        "alpaca-auth-diagnose",
+        help="Diagnose global/alpha/beta Alpaca paper auth (never prints secrets)",
+    )
+    subparsers.add_parser(
+        "competition-readiness-check",
+        help="Show per-team competition readiness and exact blockers (paper-only)",
+    )
+    subparsers.add_parser("start-week-competition", help="Start the Alpha vs Beta weekly paper competition")
+    week_cycle_parser = subparsers.add_parser("run-week-cycle", help="Run one gated paper cycle for a team")
+    week_cycle_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to run a cycle for.")
+    subparsers.add_parser("week-competition-status", help="Show Alpha vs Beta competition status and ranking")
+    subparsers.add_parser("stop-week-competition", help="Stop the weekly paper competition")
+    learning_parser = subparsers.add_parser("team-learning-status", help="Show a team's learning ledger")
+    learning_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to show learning for.")
+    scorecards_parser = subparsers.add_parser("export-team-scorecards", help="Export team scorecards to Markdown")
+    scorecards_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=Path("data/reports/team_scorecards.md"),
+        help="Markdown report path. Defaults to data/reports/team_scorecards.md.",
+    )
+    kill_on_parser = subparsers.add_parser("kill-switch-on", help="Engage the global kill switch")
+    kill_on_parser.add_argument("--reason", help="Optional reason for engaging the kill switch.")
+    subparsers.add_parser("kill-switch-off", help="Disengage the global kill switch")
+    subparsers.add_parser("kill-switch-status", help="Show the global kill switch state")
+
     args = parser.parse_args()
 
     if args.command == "init-db":
@@ -899,7 +1235,7 @@ def main() -> None:
     elif args.command == "dry-run":
         run_dry_run(strategy_name=args.strategy)
     elif args.command == "paper-status":
-        run_paper_status()
+        run_paper_status(team=args.team)
     elif args.command == "report":
         run_report(run_id=args.run_id)
     elif args.command == "compare-strategies":
@@ -984,6 +1320,30 @@ def main() -> None:
         )
     elif args.command == "strategy-status":
         run_strategy_status(registry_path=args.registry_path)
+    elif args.command == "paper-permissions":
+        run_paper_permissions()
+    elif args.command == "alpaca-auth-diagnose":
+        run_alpaca_auth_diagnose()
+    elif args.command == "competition-readiness-check":
+        run_competition_readiness_check()
+    elif args.command == "start-week-competition":
+        run_start_week_competition()
+    elif args.command == "run-week-cycle":
+        run_week_cycle_cli(team=args.team)
+    elif args.command == "week-competition-status":
+        run_week_competition_status()
+    elif args.command == "stop-week-competition":
+        run_stop_week_competition()
+    elif args.command == "team-learning-status":
+        run_team_learning_status(team=args.team)
+    elif args.command == "export-team-scorecards":
+        run_export_team_scorecards(report_path=args.report_path)
+    elif args.command == "kill-switch-on":
+        run_kill_switch_on(reason=args.reason)
+    elif args.command == "kill-switch-off":
+        run_kill_switch_off()
+    elif args.command == "kill-switch-status":
+        run_kill_switch_status()
     elif args.command == "discord-bot":
         run_discord_bot_cli()
     elif args.command == "dashboard":

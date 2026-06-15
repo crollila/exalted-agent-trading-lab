@@ -52,6 +52,13 @@ class OrderRequest(BaseModel):
     limit_price: float | None = None
     dry_run: bool = True
     risk_approved: bool = False
+    # Advanced paper attributes. Each must be produced from an approved advanced
+    # risk decision and routed through its dedicated, gated broker method.
+    short: bool = False
+    margin: bool = False
+    option_symbol: str | None = None
+    option_contract: dict | None = None
+    contracts: int | None = Field(default=None, gt=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

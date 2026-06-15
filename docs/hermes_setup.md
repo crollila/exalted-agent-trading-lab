@@ -162,3 +162,11 @@ The strict JSON payload does not contain prices. Conversion to the existing `Tra
   "portfolio_notes": "Maintain cash reserve."
 }
 ```
+
+## Multi-provider model abstraction
+
+Beyond the Hermes/Ollama path, the lab has a provider abstraction supporting OpenAI,
+Anthropic/Claude, and Ollama via `EXALTED_LLM_PROVIDER`. Providers return structured JSON only
+(proposal/review/learning), never receive secrets, and never get broker access. If a hosted
+provider's key is missing, it fails safely with a clear message. See
+`docs/model_provider_setup.md` for setup and safety details. LLMs never place trades.

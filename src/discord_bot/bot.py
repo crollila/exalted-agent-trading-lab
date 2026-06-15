@@ -38,7 +38,21 @@ from src.brokers.order_models import (
     TradeProposal,
 )
 from src.brokers.team_alpaca_config import TEAM_ALPACA_ENV_PREFIXES, load_team_alpaca_paper_config
+from src.competition.risk_engine import AccountContext
+from src.competition.week_competition import (
+    WEEK_TEAMS,
+    competition_status,
+    run_week_cycle,
+    start_week_competition,
+    stop_week_competition,
+)
+from src.config.permissions import TradingPermissions
 from src.config.settings import Settings
+from src.safety.kill_switch import (
+    disengage as kill_switch_disengage,
+    engage as kill_switch_engage,
+    read_kill_switch,
+)
 from src.db.database import (
     complete_run,
     create_run,
@@ -105,6 +119,8 @@ SCHEDULED_TEAM_UPDATE_MINUTES_ENV = "DISCORD_SCHEDULED_TEAM_UPDATE_MINUTES"
 RISK_APPROVAL_TOKEN = "RISK_AGENT_APPROVED"
 REVIEW_APPROVAL_TOKEN = "REVIEW_AGENT_APPROVED"
 AUTONOMY_MODE_PAPER_STOCKS_ONLY = "paper_stocks_only"
+AUTONOMY_MODE_PAPER_ADVANCED = "paper_advanced"
+ALLOWED_AUTONOMY_MODES = (AUTONOMY_MODE_PAPER_STOCKS_ONLY, AUTONOMY_MODE_PAPER_ADVANCED)
 
 
 @dataclass(frozen=True)
@@ -304,8 +320,9 @@ def default_team_autonomy_config(team_id: str) -> TeamAutonomyConfig:
 
 def parse_autonomy_mode(raw_value: str | None) -> str:
     mode = _clean_optional(raw_value) or AUTONOMY_MODE_PAPER_STOCKS_ONLY
-    if mode != AUTONOMY_MODE_PAPER_STOCKS_ONLY:
-        raise ValueError(f"Autonomy mode must be {AUTONOMY_MODE_PAPER_STOCKS_ONLY}.")
+    if mode not in ALLOWED_AUTONOMY_MODES:
+        allowed = ", ".join(ALLOWED_AUTONOMY_MODES)
+        raise ValueError(f"Autonomy mode must be one of: {allowed}.")
     return mode
 
 
@@ -1319,8 +1336,104 @@ def build_team_report_summary(team_id: str, *, settings: Settings | None = None)
     return format_report(report_result.report)
 
 
+# --- Weekly competition + kill switch builders (paper-only; chat never submits) ---
+
+
+def _competition_account(settings: Settings) -> AccountContext:
+    return AccountContext(
+        equity=settings.starting_equity,
+        cash=settings.starting_equity,
+        buying_power=settings.starting_equity * 2.0,
+    )
+
+
+def build_start_week_competition_summary(*, settings: Settings | None = None) -> str:
+    settings = settings or Settings.from_env()
+    state = start_week_competition(starting_equity=settings.starting_equity)
+    return "\n".join(
+        [
+            "Started Alpha vs Beta weekly paper competition (paper-only).",
+            f"Week start: {state.week_start}",
+            f"Week end: {state.week_end}",
+            f"Teams: {', '.join(state.teams)}",
+        ]
+    )
+
+
+def build_run_week_cycle_summary(team_id: str, *, settings: Settings | None = None) -> str:
+    if team_id not in WEEK_TEAMS:
+        return f"Unknown team '{team_id}'. Use one of: {', '.join(WEEK_TEAMS)}."
+    settings = settings or Settings.from_env()
+    permissions = TradingPermissions.from_env()
+    # Discord runs the gated cycle for research/routing only: client is never wired
+    # here, so chat surfaces can never submit broker orders.
+    result = run_week_cycle(
+        team_id,
+        permissions=permissions,
+        account=_competition_account(settings),
+        client=None,
+        dry_run=True,
+    )
+    summary = result.routing.summary()
+    lines = [
+        f"Ran paper research cycle for {team_id} (Discord routing only; no orders submitted).",
+        f"Execution-eligible: {summary['execution_eligible']}",
+        f"Simulation-only: {summary['simulation_only']}",
+        f"Rejected: {summary['rejected']}",
+    ]
+    if result.kill_switch_engaged:
+        lines.append("Kill switch engaged: execution path skipped.")
+    return "\n".join(lines)
+
+
+def build_week_competition_status_summary() -> str:
+    status = competition_status()
+    lines = [
+        "Alpha vs Beta weekly competition (paper-only)",
+        f"Active: {status['active']}",
+        f"Week start: {status['week_start']}",
+        f"Week end: {status['week_end']}",
+    ]
+    teams = status["teams"]
+    if not teams:
+        lines.append("No team scorecards yet. Run !run_week_cycle team_alpha.")
+        return "\n".join(lines)
+    for card in teams:
+        excess = card.get("excess_return_vs_spy")
+        excess_text = "unknown" if excess is None else f"{excess:.4f}"
+        lines.append(
+            f"#{card.get('current_rank')} {card['team_id']}: "
+            f"equity={card['current_equity']:.2f} excessVsSPY={excess_text} "
+            f"orders={card['orders_submitted']} approved={card['approved_count']} "
+            f"sim_only={card['simulation_only_count']}"
+        )
+    return "\n".join(lines)
+
+
+def build_stop_week_competition_summary() -> str:
+    state = stop_week_competition()
+    return f"Stopped weekly paper competition. Stopped at: {state.stopped_at}"
+
+
+def build_kill_switch_summary(action: str = "status") -> str:
+    action = (action or "status").strip().lower()
+    if action in ("on", "engage"):
+        state = kill_switch_engage(reason="Discord kill switch")
+        return f"KILL SWITCH ENGAGED. {state.describe()}"
+    if action in ("off", "disengage"):
+        state = kill_switch_disengage()
+        return f"Kill switch disengaged. {state.describe()}"
+    return read_kill_switch().describe()
+
+
 def run_discord_bot(config: DiscordBotConfig | None = None) -> None:
-    config = config or DiscordBotConfig.from_env()
+    # Validate the token first: a missing token must report clearly before any
+    # deeper autonomy-config validation (e.g. advanced autonomy modes) runs.
+    if config is None:
+        if not _clean_optional(os.getenv(TOKEN_ENV)):
+            print(f"Discord bot unavailable: {TOKEN_ENV} is required.", file=sys.stderr)
+            raise SystemExit(1)
+        config = DiscordBotConfig.from_env()
     if not config.token:
         print(f"Discord bot unavailable: {TOKEN_ENV} is required.", file=sys.stderr)
         raise SystemExit(1)
@@ -1499,6 +1612,26 @@ def run_discord_bot(config: DiscordBotConfig | None = None) -> None:
     @bot.command(name="team_report")
     async def prefix_team_report(ctx, team_id: str) -> None:
         await send_prefix_response(ctx, _safe_command(lambda: build_team_report_summary(team_id)))
+
+    @bot.command(name="start_week_competition")
+    async def prefix_start_week_competition(ctx) -> None:
+        await send_prefix_response(ctx, _safe_command(build_start_week_competition_summary))
+
+    @bot.command(name="run_week_cycle")
+    async def prefix_run_week_cycle(ctx, team_id: str) -> None:
+        await send_prefix_response(ctx, _safe_command(lambda: build_run_week_cycle_summary(team_id)))
+
+    @bot.command(name="week_competition_status")
+    async def prefix_week_competition_status(ctx) -> None:
+        await send_prefix_response(ctx, _safe_command(build_week_competition_status_summary))
+
+    @bot.command(name="stop_week_competition")
+    async def prefix_stop_week_competition(ctx) -> None:
+        await send_prefix_response(ctx, _safe_command(build_stop_week_competition_summary))
+
+    @bot.command(name="kill_switch")
+    async def prefix_kill_switch(ctx, action: str = "status") -> None:
+        await send_prefix_response(ctx, _safe_command(lambda: build_kill_switch_summary(action)))
 
     @bot.command(name="team_autonomy_status")
     async def prefix_team_autonomy_status(ctx, team_id: str) -> None:

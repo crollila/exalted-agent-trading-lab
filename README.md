@@ -417,3 +417,40 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows_launcher.ps1
 ```
 
 The launcher only starts Streamlit. It is not the trading engine, does not include secrets, and does not bypass any safety gate. See `docs/user_quickstart.md` and `docs/dashboard_setup.md`.
+
+## Alpha vs Beta weekly paper competition (advanced paper trading)
+
+Two autonomous research teams (`team_alpha`, `team_beta`) can research, propose, test, learn,
+and improve using stocks, shorting, margin, and options — **in Alpaca paper mode only**.
+
+Important: this is paper-only and never live. Advanced paper trading (shorting, margin, options)
+is explicitly unlockable but **disabled by default**. Enable a level only via your local,
+git-ignored `.env`:
+
+```env
+TRADING_MODE=paper
+ENABLE_PAPER_SHORTING=true   # Level 2 (default false)
+ENABLE_PAPER_MARGIN=true     # Level 3 (default false)
+ENABLE_PAPER_OPTIONS=true    # Level 4 (default false)
+```
+
+Run it:
+
+```bash
+python -m src.main paper-permissions
+python -m src.main start-week-competition
+python -m src.main run-week-cycle --team team_alpha
+python -m src.main run-week-cycle --team team_beta
+python -m src.main week-competition-status
+python -m src.main team-learning-status --team team_alpha
+python -m src.main export-team-scorecards
+python -m src.main kill-switch-on        # emergency stop; checked before every broker submit
+python -m src.main kill-switch-off
+```
+
+Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
+computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.
+Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands cannot submit orders.
+Paper trading does not prove live profitability. "Self-improvement" means runtime memory,
+scorecards, and prompt feedback — not model-weight training. See `docs/risk_policy.md` and
+`docs/model_provider_setup.md`.

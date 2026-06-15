@@ -21,6 +21,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from src.config.settings import Settings
+from src.ui import competition_view
 from src.discord_bot.bot import (
     DiscordBotConfig,
     build_disable_autonomy_summary,
@@ -919,6 +920,7 @@ def _render_daily_lab(config: DiscordBotConfig, settings: Settings | None, statu
 def _render_paper_accounts(settings: Settings | None) -> None:
     st.header("Paper accounts")
     st.caption("Read-only. No secrets shown, no order-submit form. Orders only flow through gated team cycles.")
+    competition_view.render_auth_panel(st)
     if settings is None:
         st.warning("Settings/credentials not configured. Add them on the Setup / Secrets page.")
         return
@@ -1626,6 +1628,13 @@ def render() -> None:
         "Home",
         "Portfolio Cockpit",
         "Overview",
+        "Weekly Competition",
+        "Alpha vs Beta Scoreboard",
+        "Team Learning",
+        "Permissions / Risk Levels",
+        "Advanced Paper Trading",
+        "Kill Switch",
+        "Model Provider Setup",
         "Daily Lab",
         "Teams",
         "Agents",
@@ -1652,6 +1661,20 @@ def render() -> None:
         _render_portfolio_cockpit(config, settings, statuses)
     elif page == "Overview":
         _render_overview(config, settings, statuses)
+    elif page == "Weekly Competition":
+        competition_view.render_weekly_competition(st, settings)
+    elif page == "Alpha vs Beta Scoreboard":
+        competition_view.render_scoreboard(st)
+    elif page == "Team Learning":
+        competition_view.render_team_learning(st)
+    elif page == "Permissions / Risk Levels":
+        competition_view.render_permissions(st)
+    elif page == "Advanced Paper Trading":
+        competition_view.render_advanced_paper(st)
+    elif page == "Kill Switch":
+        competition_view.render_kill_switch(st)
+    elif page == "Model Provider Setup":
+        competition_view.render_model_provider(st)
     elif page == "Daily Lab":
         _render_daily_lab(config, settings, statuses)
     elif page == "Teams":

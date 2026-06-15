@@ -1119,3 +1119,30 @@ Only after:
 - tiny capital only
 
 This phase is intentionally not part of the current build.
+
+## Phase 8 - Alpha vs Beta weekly paper competition + advanced paper permissions
+
+Goal: unlock paper-only shorting, margin, and options for two autonomous research teams
+without removing safeguards, by building the missing deterministic infrastructure.
+
+Delivered:
+
+- `src/config/permissions.py` — explicit, paper-only permission levels and risk caps; all
+  advanced levels default off (fail-closed).
+- `src/safety/kill_switch.py` — persisted global kill switch checked before every broker submit.
+- `src/competition/proposals.py` — strict schema for all 8 proposal types with provenance.
+- `src/competition/risk_engine.py` — deterministic advanced risk for shorting/margin/options;
+  computes approved quantity/contracts (never the LLM).
+- `src/competition/router.py` — routes to execution_eligible / simulation_only / rejected.
+- `src/competition/execution.py` — the single gated broker bridge; logs every attempt.
+- `src/brokers/options_adapter.py` — options adapter boundary (clear error if unconfigured).
+- `src/brokers/alpaca_client.py` — gated short/margin/option submit methods, live-endpoint refusal.
+- `src/competition/week_competition.py` + `scorecard.py` — competition state, 11-stage cycle,
+  scorecards with SPY comparison and ranking.
+- `src/learning/team_memory.py` — runtime learning ledger (memory/scorecards/prompt feedback).
+- `src/research/data_tools.py` — allowlisted, provenance-tagged, read-only research tools.
+- `src/agents/llm_provider.py` — OpenAI/Anthropic/Ollama abstraction, structured JSON only.
+- UI pages, Discord commands, CLI commands, comprehensive mocked tests, and docs.
+
+Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no
+order submission from chat/Agent Hub/ask/UI surfaces.

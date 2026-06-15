@@ -109,3 +109,25 @@ and still needs your local `.env`, Alpaca paper keys, and optional Ollama setup.
 - Market closed: account views may work, but paper tests should wait for market hours.
 - Model unavailable: check Ollama is running and `HERMES_BASE_URL` / `HERMES_MODEL` are set.
 - Discord missing: ignore it unless you want Discord commands; the dashboard works without it.
+
+## Weekly competition + advanced paper trading
+
+The lab includes an Alpha vs Beta weekly paper competition. It is paper-only; advanced levels
+(shorting, margin, options) are off by default and require explicit `.env` flags.
+
+```bash
+python -m src.main paper-permissions          # show enabled levels + caps
+python -m src.main start-week-competition
+python -m src.main run-week-cycle --team team_alpha
+python -m src.main week-competition-status
+python -m src.main team-learning-status --team team_alpha
+python -m src.main kill-switch-status
+```
+
+In the dashboard, see the **Weekly Competition**, **Alpha vs Beta Scoreboard**, **Team Learning**,
+**Permissions / Risk Levels**, **Advanced Paper Trading**, **Kill Switch**, and
+**Model Provider Setup** pages. The UI never submits orders; secret fields never prefill.
+
+To enable an advanced level, set it in your local `.env` (never committed):
+`ENABLE_PAPER_SHORTING=true`, `ENABLE_PAPER_MARGIN=true`, or `ENABLE_PAPER_OPTIONS=true`.
+See `docs/risk_policy.md` and `docs/model_provider_setup.md`. LLMs never place trades.

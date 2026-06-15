@@ -10,6 +10,9 @@ data/reports/
 data/notes/
 data/runtime/
 data/backups/
+data/competition/
+data/agent_learning/
+data/scorecards/
 *.pyc
 .DS_Store
 .idea/

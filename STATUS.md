@@ -2,6 +2,31 @@
 
 ## Current state
 
+Phase 8 — Alpha vs Beta weekly paper competition with explicit, paper-only advanced
+permission levels (shorting, margin, options), a deterministic advanced risk engine,
+proposal routing, a kill switch, a team learning loop, allowlisted research tools, and
+an LLM provider abstraction (OpenAI/Anthropic/Ollama).
+
+Key safety properties (unchanged in spirit, now broader):
+
+- Paper-only. No live trading. The broker wrapper refuses live endpoints.
+- Advanced paper trading (shorting/margin/options) is unlockable but **off by default**.
+- LLMs/agents never place trades; the deterministic risk engine computes approved size.
+- Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands cannot submit orders.
+- The UI never submits orders; it calls the same safe functions and shows masked secrets only.
+- A global kill switch is checked immediately before every broker submission.
+- `.env` and `data/` are never committed; API keys are never printed, logged, or committed.
+
+New commands: `paper-permissions`, `start-week-competition`, `run-week-cycle --team`,
+`week-competition-status`, `stop-week-competition`, `team-learning-status --team`,
+`export-team-scorecards`, `kill-switch-on|off|status`. Discord: `!start_week_competition`,
+`!run_week_cycle`, `!week_competition_status`, `!stop_week_competition`, `!kill_switch`.
+
+Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
+model-weight training. Paper trading does not prove live profitability.
+
+### Prior state
+
 Phase 7G natural Discord team chat and autonomous paper-cycle scaffolding completed.
 
 Included:

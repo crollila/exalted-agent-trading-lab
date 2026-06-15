@@ -77,6 +77,49 @@ If credentials are missing or paper safety settings are wrong, the command fails
 
 ## Order safety
 
-The Alpaca wrapper only accepts risk-approved stock `OrderRequest` objects. Dry-run orders, options, non-stock assets, margin fields, and short fields are rejected before submission.
+The Alpaca wrapper only accepts risk-approved `OrderRequest` objects and refuses live
+endpoints, dry-run orders, and unapproved orders before submission.
 
-Tests mock Alpaca completely and do not send paper orders.
+## Advanced paper order paths (paper-only, gated)
+
+The wrapper exposes dedicated, gated methods, each checked against the kill switch
+immediately before submission:
+
+- `submit_paper_order` — long stock (Level 1). Rejects short/margin/option fields.
+- `submit_paper_short_order` — short stock (Level 2). Requires `short=True` and SELL.
+- `submit_paper_margin_order` — margin stock (Level 3). Requires `margin=True`.
+- `submit_paper_option_order` — defined-risk options (Level 4) via an adapter boundary.
+
+If no options execution adapter is configured, `submit_paper_option_order` raises a clear
+runtime error (`OptionsAdapterNotConfigured`) instead of faking a fill. Every attempted
+broker submission is logged; every skipped unsupported adapter path is logged.
+
+These methods are reached only from the gated Run Cycle path — never from chat, the Agent
+Hub, ask commands, or the UI. Advanced levels are paper-only and off by default; enable them
+explicitly via `.env` (`ENABLE_PAPER_SHORTING`, `ENABLE_PAPER_MARGIN`, `ENABLE_PAPER_OPTIONS`).
+
+Tests mock Alpaca completely and do not send real orders.
+
+## Team-aware credentials (global / alpha / beta)
+
+There are three independent paper credential sources. Global credentials may be invalid
+without blocking the teams; **team execution never falls back to global keys**.
+
+- `global` -> `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`
+- `team_alpha` -> `TEAM_ALPHA_ALPACA_API_KEY` / `TEAM_ALPHA_ALPACA_SECRET_KEY`
+- `team_beta` -> `TEAM_BETA_ALPACA_API_KEY` / `TEAM_BETA_ALPACA_SECRET_KEY`
+
+Commands (secrets are never printed):
+
+```bash
+python -m src.main paper-status --team global
+python -m src.main paper-status --team team_alpha
+python -m src.main paper-status --team team_beta
+python -m src.main alpaca-auth-diagnose          # presence/length + auth classification per source
+python -m src.main competition-readiness-check   # per-team readiness + exact blockers
+```
+
+`alpaca-auth-diagnose` classifies each source as one of: `missing_env`, `endpoint_mismatch`,
+`unauthorized_401`, `forbidden_403`, `network_error`, `sdk_error`, `unknown`, or `ok`.
+The weekly competition uses each team's own credentials for account context and order
+submission; if a team's keys are missing/invalid, only that team is blocked.
