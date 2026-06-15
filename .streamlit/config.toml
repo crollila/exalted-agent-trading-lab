@@ -1,0 +1,11 @@
+# Dark operator-console theme for the ExaltedFable Agent Trading Lab dashboard.
+[theme]
+base = "dark"
+primaryColor = "#4f9dff"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1c2333"
+textColor = "#e6edf3"
+font = "monospace"
+
+[browser]
+gatherUsageStats = false

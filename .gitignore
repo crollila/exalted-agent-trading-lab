@@ -8,7 +8,12 @@ data/experiments/
 data/agent_runs/
 data/reports/
 data/notes/
+data/runtime/
+data/backups/
 *.pyc
 .DS_Store
 .idea/
 .vscode/
+dist/
+build/
+*.spec

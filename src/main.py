@@ -407,6 +407,14 @@ def run_dashboard_cli() -> None:
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(dashboard_path)], check=False)
 
 
+def run_desktop_app_cli() -> None:
+    """Launch the desktop-style local app wrapper around Streamlit."""
+
+    from src.ui.desktop_app import launch_desktop_app
+
+    raise SystemExit(launch_desktop_app())
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -879,6 +887,10 @@ def main() -> None:
         "dashboard",
         help="Launch the local-only Streamlit operator dashboard (paper-only)",
     )
+    subparsers.add_parser(
+        "app",
+        help="Launch the optional desktop-style app window around the Streamlit dashboard",
+    )
 
     args = parser.parse_args()
 
@@ -976,6 +988,8 @@ def main() -> None:
         run_discord_bot_cli()
     elif args.command == "dashboard":
         run_dashboard_cli()
+    elif args.command == "app":
+        run_desktop_app_cli()
     else:
         raise ValueError(f"Unknown command: {args.command}")
 

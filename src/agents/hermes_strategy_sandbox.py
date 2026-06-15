@@ -63,13 +63,14 @@ class HermesSandboxRequest(BaseModel):
 
     @field_validator("strategy_notes", "learning_goal")
     @classmethod
-    def optional_text_must_not_be_empty(cls, value: str | None) -> str | None:
+    def optional_text_blank_to_none(cls, value: str | None) -> str | None:
+        # These optional descriptive fields are echoed by the model; a blank value means
+        # "absent", so coerce empty/whitespace to None rather than rejecting the whole
+        # proposal request. (No trading semantics depend on these fields.)
         if value is None:
-            return value
+            return None
         text = value.strip()
-        if not text:
-            raise ValueError("must not be empty when provided")
-        return text
+        return text or None
 
     @field_validator("proposals")
     @classmethod

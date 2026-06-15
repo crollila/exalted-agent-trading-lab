@@ -16,24 +16,34 @@ Safety notes:
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, MutableMapping, Sequence
+
+import json
+from datetime import datetime, timezone
 
 from src.agents.hermes_strategy_sandbox import load_hermes_sandbox_file
 from src.config.settings import Settings
 from src.discord_bot.bot import (
     DEFAULT_ASK_TEAM_OUTPUT_DIR,
+    DEFAULT_REGISTRY_PATH,
     DEFAULT_TEAM_CYCLE_DIR,
     REVIEW_APPROVAL_TOKEN,
     RISK_APPROVAL_TOKEN,
     DiscordBotConfig,
+    TeamAutonomyConfig,
     _approval_file_is_true,
     _latest_paper_order_status,
     _proposal_routing_split,
+    build_ask_agent_summary,
+    build_ask_team_summary,
     build_team_paper_cycle_summary,
     latest_agent_run_path_for_team,
+    save_runtime_team_autonomy_config,
 )
+from src.agents.hermes_team_registry import load_hermes_team_registry_file
 
 KNOWN_TEAM_IDS: tuple[str, ...] = ("team_alpha", "team_beta")
 
@@ -42,11 +52,42 @@ DEFAULT_RUN_CYCLE_PROMPT = (
     "Prefer exactly one stock_long idea. Do not use options, margin, or shorting."
 )
 
+QUICK_PROMPTS: dict[str, str] = {
+    "Conservative 1-stock plan": DEFAULT_RUN_CYCLE_PROMPT,
+    "Beat SPY this week": (
+        "Propose 1-2 stock_long ideas with the best chance of beating SPY this week. "
+        "Paper-only. No options, margin, or shorting."
+    ),
+    "Risk-off defensive plan": (
+        "Build a defensive, risk-off paper plan that prioritizes capital preservation while "
+        "still aiming to beat SPY. Prefer one low-volatility stock_long idea. "
+        "No options, margin, or shorting."
+    ),
+    "Compare Alpha/Beta ideas": (
+        "Propose a single high-conviction stock_long idea and explain how it differs from a "
+        "typical SPY-beating play. Paper-only. No options, margin, or shorting."
+    ),
+}
+
+# Safe first-test defaults used by the "reset team to safe defaults" control.
+SAFE_DEFAULT_MAX_ORDERS_PER_DAY = 1
+SAFE_DEFAULT_MAX_DAILY_NOTIONAL: dict[str, float] = {
+    "team_alpha": 250000.0,
+    "team_beta": 0.0,
+}
+
 _SECRET_KEY_HINTS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD")
 _SECRET_MASK = "********"
 _NOT_SET = "(not set)"
 
 _ENV_LINE_PATTERN = re.compile(r'^(\s*["\']?)([A-Za-z0-9_.\-]+)(["\']?\s*[:=]\s*)(.+)$')
+# Matches a secret-named assignment anywhere in a line (key contains KEY/SECRET/TOKEN/...).
+_INLINE_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r'([A-Za-z0-9_.\-]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Za-z0-9_.\-]*)'
+    r'(["\']?\s*[:=]\s*["\']?)'
+    r'([^\s"\']+)',
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +122,12 @@ def is_configured(value: object) -> bool:
 
 
 def redact_secret_like_text(text: str) -> str:
-    """Redact values of secret-like ``KEY=VALUE`` / ``"key": "value"`` lines.
+    """Redact secret-like values before any file/log contents are displayed.
 
-    Used as a defensive pass before showing any file contents, so an accidental token or
-    key in a runtime file can never be rendered in the dashboard.
+    Two passes: (1) line-leading ``KEY=VALUE`` / ``"key": "value"`` assignments whose key
+    looks like a secret, and (2) any secret-named assignment appearing mid-line (e.g. a token
+    embedded in prose). This is a defensive guard so an accidental token or key in a runtime
+    file or log can never be rendered in the dashboard.
     """
 
     redacted_lines: list[str] = []
@@ -94,7 +137,10 @@ def redact_secret_like_text(text: str) -> str:
             redacted_lines.append(f"{match.group(1)}{match.group(2)}{match.group(3)}{_SECRET_MASK}")
         else:
             redacted_lines.append(line)
-    return "\n".join(redacted_lines)
+    joined = "\n".join(redacted_lines)
+    return _INLINE_SECRET_ASSIGNMENT_PATTERN.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}{_SECRET_MASK}", joined
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -343,3 +389,383 @@ def run_team_cycle_via_dashboard(
 
     output = runner(team_id, prompt_text, config=config, **runner_kwargs)
     return DashboardRunResult(ran=True, message=output)
+
+
+# ---------------------------------------------------------------------------
+# Team runtime config updates (delegates to existing persistence)
+# ---------------------------------------------------------------------------
+def update_team_runtime_config(
+    team_id: str,
+    config: DiscordBotConfig,
+    *,
+    enabled: bool | None = None,
+    max_paper_orders_per_day: int | None = None,
+    max_daily_notional: float | None = None,
+    require_risk_agent_approval: bool | None = None,
+    require_review_agent_approval: bool | None = None,
+    mode: str | None = None,
+) -> Path:
+    """Update a team's runtime autonomy config, persisting via the existing helper.
+
+    Only fields passed (non-None) are changed; the rest carry over from the current config.
+    Returns the path to the saved runtime config file.
+    """
+
+    current = config.autonomy_for(team_id)
+    updated = TeamAutonomyConfig(
+        team_id=team_id,
+        enabled=current.enabled if enabled is None else enabled,
+        mode=current.mode if mode is None else mode,
+        max_paper_orders_per_day=(
+            current.max_paper_orders_per_day
+            if max_paper_orders_per_day is None
+            else max_paper_orders_per_day
+        ),
+        max_daily_notional=(
+            current.max_daily_notional if max_daily_notional is None else max_daily_notional
+        ),
+        require_risk_agent_approval=(
+            current.require_risk_agent_approval
+            if require_risk_agent_approval is None
+            else require_risk_agent_approval
+        ),
+        require_review_agent_approval=(
+            current.require_review_agent_approval
+            if require_review_agent_approval is None
+            else require_review_agent_approval
+        ),
+    )
+    return save_runtime_team_autonomy_config(updated, config.autonomy_config_path)
+
+
+def reset_team_to_safe_defaults(team_id: str, config: DiscordBotConfig) -> Path:
+    """Reset a team to conservative first-test defaults (autonomy off, tight caps)."""
+
+    return update_team_runtime_config(
+        team_id,
+        config,
+        enabled=False,
+        max_paper_orders_per_day=SAFE_DEFAULT_MAX_ORDERS_PER_DAY,
+        max_daily_notional=SAFE_DEFAULT_MAX_DAILY_NOTIONAL.get(team_id, 0.0),
+        require_risk_agent_approval=True,
+        require_review_agent_approval=True,
+    )
+
+
+def disable_all_autonomy(config: DiscordBotConfig) -> list[Path]:
+    """Kill switch: disable autonomy for every known team. Returns saved config paths."""
+
+    return [update_team_runtime_config(team_id, config, enabled=False) for team_id in KNOWN_TEAM_IDS]
+
+
+# ---------------------------------------------------------------------------
+# Persistent UI notifications (pure; operates on a session-state-like mapping)
+# ---------------------------------------------------------------------------
+NOTIFICATIONS_STATE_KEY = "command_center_notifications"
+NOTIFICATION_TTL_SECONDS = 8.0
+NOTIFICATION_LEVELS = ("success", "info", "warning", "error")
+
+
+def push_notification(
+    state: MutableMapping,
+    message: str,
+    *,
+    level: str = "success",
+    now: float | None = None,
+    ttl_seconds: float = NOTIFICATION_TTL_SECONDS,
+) -> list[dict]:
+    """Append a persistent notification to a session-state-like mapping.
+
+    Notifications survive Streamlit reruns (so success notices don't flash for one frame)
+    until they expire after ``ttl_seconds`` or are dismissed.
+    """
+
+    if level not in NOTIFICATION_LEVELS:
+        level = "info"
+    current = time.time() if now is None else now
+    items = list(state.get(NOTIFICATIONS_STATE_KEY, []))
+    items.append({"message": str(message), "level": level, "expires_at": current + ttl_seconds})
+    state[NOTIFICATIONS_STATE_KEY] = items
+    return items
+
+
+def active_notifications(state: MutableMapping, *, now: float | None = None) -> list[dict]:
+    """Return non-expired notifications, pruning expired ones from the mapping."""
+
+    current = time.time() if now is None else now
+    items = list(state.get(NOTIFICATIONS_STATE_KEY, []))
+    active = [item for item in items if float(item.get("expires_at", 0)) > current]
+    state[NOTIFICATIONS_STATE_KEY] = active
+    return active
+
+
+def dismiss_notifications(state: MutableMapping) -> None:
+    """Clear all notifications."""
+
+    state[NOTIFICATIONS_STATE_KEY] = []
+
+
+# ---------------------------------------------------------------------------
+# Agent Hub (proposal-only / analysis-only; never trades)
+# ---------------------------------------------------------------------------
+AGENT_HUB_AGENT_IDS: dict[str, tuple[str, ...]] = {
+    "team_alpha": ("alpha_research_01", "alpha_risk_01", "alpha_review_01"),
+    "team_beta": ("beta_research_01", "beta_risk_01", "beta_review_01"),
+}
+
+# Conversational modes (chat) and structured proposal modes (sandbox-routed).
+TEAM_CHAT_MODE = "team_chat"
+AGENT_CHAT_MODE = "agent_chat"
+ASK_TEAM_MODE = "ask_team"
+ASK_AGENT_MODE = "ask_agent"
+AGENT_SCOPED_MODES = (AGENT_CHAT_MODE, ASK_AGENT_MODE)
+DEFAULT_AGENT_HUB_DIR = Path("data/notes/agent_hub")
+
+
+def agent_hub_history_key(team_id: str, mode: str, agent_id: str | None = None) -> str:
+    """Build a session-state key for a conversation, scoped by team/mode/agent.
+
+    Agent-scoped modes (Agent Chat, Ask Agent for Proposal) include the agent id so each
+    agent and each mode keeps its own separate transcript.
+    """
+
+    normalized_mode = str(mode).strip().lower().replace(" ", "_")
+    base = f"agent_hub::{team_id}::{normalized_mode}"
+    if normalized_mode in AGENT_SCOPED_MODES and agent_id:
+        base += f"::{agent_id}"
+    return base
+
+
+def get_chat_history(state: MutableMapping, key: str) -> list[dict]:
+    """Return the chat history list for a conversation key (empty if none)."""
+
+    return list(state.get(key, []))
+
+
+def append_chat_message(state: MutableMapping, key: str, role: str, content: str) -> list[dict]:
+    """Append a chat message (role/content) to a conversation's history."""
+
+    history = list(state.get(key, []))
+    history.append({"role": str(role), "content": str(content)})
+    state[key] = history
+    return history
+
+
+def clear_chat_history(state: MutableMapping, key: str) -> None:
+    """Clear a conversation's chat history."""
+
+    state[key] = []
+
+
+def agent_hub_transcript_path(
+    key: str,
+    *,
+    output_dir: Path | str = DEFAULT_AGENT_HUB_DIR,
+    now: "datetime | None" = None,
+) -> Path:
+    """Build a timestamped transcript path under the ignored agent-hub runtime dir."""
+
+    timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", key)
+    return Path(output_dir) / f"{safe_key}_{timestamp}.md"
+
+
+def save_agent_hub_transcript(history: Sequence[dict], path: Path | str) -> Path:
+    """Write a chat transcript to a runtime markdown file (secret-redacted)."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Agent Hub transcript",
+        "",
+        "_Proposal-only / analysis-only. No trades placed._",
+        "",
+    ]
+    for message in history:
+        role = str(message.get("role", "?"))
+        content = redact_secret_like_text(str(message.get("content", "")))
+        lines.append(f"## {role}")
+        lines.append(content)
+        lines.append("")
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
+
+
+def default_research_agent(team_id: str, registry_path: Path | str = DEFAULT_REGISTRY_PATH):
+    """Return the active research agent for a team, or None."""
+
+    registry = load_hermes_team_registry_file(registry_path)
+    team = next((team for team in registry.teams if team.team_id == team_id), None)
+    if team is None:
+        return None
+    return next(
+        (agent for agent in team.agents if agent.active and agent.role.value == "research_agent"),
+        None,
+    )
+
+
+def validate_proposal_prompt(text: str) -> str:
+    """Return a trimmed proposal prompt, or raise if blank.
+
+    Used to block empty proposal requests in the UI before calling the proposal helper, so a
+    blank input can never become an empty ``learning_goal`` downstream.
+    """
+
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("Enter a prompt for the proposal request — it cannot be blank.")
+    return cleaned
+
+
+def agent_hub_ask_agent(
+    team_id: str,
+    agent_id: str,
+    prompt_text: str,
+    *,
+    runner: Callable[..., str] = build_ask_agent_summary,
+    **kwargs: object,
+) -> str:
+    """Ask a single agent through the existing non-trading ask-agent path.
+
+    Proposal/analysis only. Delegates to ``build_ask_agent_summary``; never submits orders.
+    """
+
+    return runner(team_id, agent_id, prompt_text, **kwargs)
+
+
+def agent_hub_ask_team(
+    team_id: str,
+    agent_id: str,
+    agent_role: str,
+    strategy_id: str,
+    prompt_text: str,
+    *,
+    runner: Callable[..., str] = build_ask_team_summary,
+    **kwargs: object,
+) -> str:
+    """Ask a team for proposal JSON through the existing non-trading ask-team path.
+
+    Proposal/analysis only. Delegates to ``build_ask_team_summary``; never submits orders.
+    """
+
+    return runner(team_id, agent_id, agent_role, strategy_id, prompt_text, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Agent stats derived from runtime files (best-effort estimates)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class AgentStat:
+    agent_id: str
+    team_id: str
+    role: str
+    latest_run_path: Path | None
+    latest_note_path: Path | None
+    latest_action_time: datetime | None
+    proposal_files_generated: int
+    latest_proposal_count: int
+    execution_eligible_count: int
+    simulation_only_count: int
+    rejected_count: int
+    cycles_participated: int
+    risk_approved: bool | None
+    review_approved: bool | None
+    is_estimate: bool = True
+
+
+def _agent_proposal_files(agent_id: str, team_id: str, proposal_output_dir: Path | str) -> list[Path]:
+    directory = Path(proposal_output_dir)
+    if not directory.is_dir():
+        return []
+    matches: list[Path] = []
+    for candidate in directory.glob("*.json"):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("team_id") == team_id and payload.get("agent_id") == agent_id:
+            matches.append(candidate)
+    return sorted(matches, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _agent_note_files(agent_id: str, team_id: str, notes_output_dir: Path | str) -> list[Path]:
+    safe_team_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", team_id.strip()) or "team"
+    team_dir = Path(notes_output_dir) / safe_team_id
+    if not team_dir.is_dir():
+        return []
+    matches = [path for path in team_dir.glob(f"{agent_id}_*.md") if path.is_file()]
+    return sorted(matches, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _mtime_datetime(path: Path | None) -> datetime | None:
+    if path is None:
+        return None
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+
+
+def collect_agent_stats(
+    team_id: str,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+    proposal_output_dir: Path | str = DEFAULT_ASK_TEAM_OUTPUT_DIR,
+    notes_output_dir: Path | str = DEFAULT_TEAM_CYCLE_DIR,
+) -> list[AgentStat]:
+    """Derive best-effort per-agent stats from runtime files.
+
+    These are runtime-derived estimates, not authoritative history. Agents never have direct
+    trade permissions; this only reads saved proposal/note files.
+    """
+
+    registry = load_hermes_team_registry_file(registry_path)
+    team = next((team for team in registry.teams if team.team_id == team_id), None)
+    if team is None:
+        return []
+
+    stats: list[AgentStat] = []
+    for agent in team.agents:
+        if not agent.active:
+            continue
+        proposal_files = _agent_proposal_files(agent.agent_id, team_id, proposal_output_dir)
+        latest_run = proposal_files[0] if proposal_files else None
+        latest_proposal_count = 0
+        execution_eligible = simulation_only = rejected = 0
+        if latest_run is not None:
+            try:
+                split = _proposal_routing_split(load_hermes_sandbox_file(latest_run))
+                execution_eligible = len(split.execution_eligible_proposals)
+                simulation_only = len(split.simulation_only_proposals)
+                rejected = len(split.rejected_proposals)
+                latest_proposal_count = execution_eligible + simulation_only + rejected
+            except OSError:
+                pass
+
+        note_files = _agent_note_files(agent.agent_id, team_id, notes_output_dir)
+        latest_note = note_files[0] if note_files else None
+        role = agent.role.value
+        risk_approved = _approval_file_is_true(latest_note, RISK_APPROVAL_TOKEN) if role == "risk_agent" else None
+        review_approved = (
+            _approval_file_is_true(latest_note, REVIEW_APPROVAL_TOKEN) if role == "review_agent" else None
+        )
+
+        action_times = [time for time in (_mtime_datetime(latest_run), _mtime_datetime(latest_note)) if time]
+        latest_action_time = max(action_times) if action_times else None
+
+        stats.append(
+            AgentStat(
+                agent_id=agent.agent_id,
+                team_id=team_id,
+                role=role,
+                latest_run_path=latest_run,
+                latest_note_path=latest_note,
+                latest_action_time=latest_action_time,
+                proposal_files_generated=len(proposal_files),
+                latest_proposal_count=latest_proposal_count,
+                execution_eligible_count=execution_eligible,
+                simulation_only_count=simulation_only,
+                rejected_count=rejected,
+                cycles_participated=len(note_files),
+                risk_approved=risk_approved,
+                review_approved=review_approved,
+            )
+        )
+    return stats

@@ -271,6 +271,21 @@ def test_stale_or_fake_option_quote_metadata_is_rejected():
     assert any("Extra inputs are not permitted" in error for error in result.routed_proposals[0].errors)
 
 
+def test_blank_optional_text_is_coerced_to_none_not_rejected():
+    # Regression: a model that echoes an empty learning_goal/strategy_notes must not fail the
+    # whole proposal request (these optional descriptive fields mean "absent" when blank).
+    payload = _valid_payload()
+    payload["learning_goal"] = ""
+    payload["strategy_notes"] = "   "
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.request is not None
+    assert result.request.learning_goal is None
+    assert result.request.strategy_notes is None
+    assert not any("must not be empty" in error for error in result.errors)
+
+
 def test_stock_long_spy_is_allowed_but_warned_for_beat_spy_goal():
     payload = _valid_payload()
     payload["learning_goal"] = "Try to beat SPY over time."

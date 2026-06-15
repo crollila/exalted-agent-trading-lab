@@ -8,6 +8,21 @@ The repo can validate strict Hermes-shaped JSON and convert valid local payloads
 
 Hermes will only produce structured trade proposals.
 
+In this app, **Hermes** means the agent runtime interface. A common local setup points that
+interface at an **Ollama** model running on your machine. Local Ollama usually has no
+per-message API fee, but it still uses your CPU/GPU, memory, and electricity. It is only as
+useful as the model, prompts, data, tools, and evaluation you provide.
+
+Hermes/Ollama does **not** have internet access by default. If agents need market data,
+account status, news, RSS, or SEC information, the app must fetch that data and pass it into
+the prompt as tool context. Agents should say data is missing rather than inventing current
+prices, news, market status, or catalysts.
+
+The app's "learning" is not model self-training. It means operator-visible runtime memory:
+saved goals, lessons, evidence paths, scorecards, and decisions that can be included in
+future prompts. It does not automatically edit code, change trading permissions, enable
+live trading, or train model weights.
+
 Bad:
 
 ```text

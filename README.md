@@ -214,7 +214,9 @@ pip install streamlit          # one-time, if not already installed
 python -m src.main dashboard   # or: streamlit run src/ui/dashboard.py
 ```
 
-The dashboard is a **local-only, paper-only** operator console — not a public web app and not live trading. It shows each team's autonomy/mode/caps, latest proposal and risk/review notes, the execution-eligible / simulation-only / rejected split, parsed approvals, and Alpaca paper status when credentials are configured. It can enable/disable autonomy, run a team cycle through the **same gated path** Discord uses, and includes a "Disable all autonomy" kill switch. It never displays secrets and never bypasses the risk/review/deterministic gates. See `docs/dashboard_setup.md` for details and recommended first-test caps.
+The dashboard ("ExaltedFable Command Center") is a **local-only, paper-only** operator console — not a public web app and not live trading. It shows each team's autonomy/mode/caps, latest proposal and risk/review notes, the execution-eligible / simulation-only / rejected split, parsed approvals, and Alpaca paper status when credentials are configured. It can enable/disable autonomy, run a team cycle through the **same gated path** Discord uses, and includes a "Disable all autonomy" kill switch. It never displays secrets and never bypasses the risk/review/deterministic gates.
+
+Sidebar pages: Overview, Teams, Agents, Agent Hub, Run Cycle, Paper Accounts, Discord Bot, Reports, Runtime Files, Settings, Setup / Secrets, Help / Safety. The **Discord Bot** page starts/stops/inspects the local bot (`python -m src.main discord-bot`) without a terminal, using PID/log files under the git-ignored `data/runtime/`; no secrets are passed on the command line. The **Agent Hub** page lets you talk to agents from the UI with four modes — **Team Chat** and **Agent Chat** for natural conversation (defaults to Team Chat), plus **Ask Team/Agent for Proposal** for the structured proposal-only paths. No Agent Hub mode submits orders or runs a paper-trading cycle. See `docs/dashboard_setup.md` for details and recommended first-test caps.
 
 Ask a configured Hermes team for proposal JSON from Discord:
 
@@ -368,3 +370,50 @@ This repo is designed to show practical engineering judgment around Python, SQLi
 - `docs/hermes_setup.md` records the disabled Hermes runtime posture and parser-only fixture behavior.
 - `docs/discord_bot_setup.md` records local Discord bot setup and safe command usage.
 - `docs/codex_workflow.md` records the ChatGPT/Codex workflow.
+## Productized local app flow (Phase 7J)
+
+The dashboard now includes selectable UI templates:
+
+- **Portfolio Cockpit** is the default daily-use layout with a broker-style Home page:
+  Alpha/Beta equity, cash, buying power, positions, market status, approvals, charts when
+  data exists, and a next-safe-action summary.
+- **Command Center** is the operator/debug Home page for process state, kill switch, bot
+  logs, runtime files, warnings, agent status, and raw evidence paths.
+- **AI Team Room** is the chat/team-first Home page with Alpha/Beta rooms, agent roles,
+  current focus, hypotheses, goals, recent lessons, and "what are we working on?" panels
+  grounded in saved runtime evidence.
+
+Normal first run:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+python -m src.main init-db
+python -m src.main app
+```
+
+`python -m src.main app` starts Streamlit locally and opens a desktop window when
+`pywebview` is installed; otherwise it falls back to a browser. Open **Setup Wizard** and
+**Setup / Secrets** in the sidebar. Start with Alpha capped at one paper order/day, Beta
+capped at zero, and both autonomy flags off. Use **Daily Lab** for editable runtime goals,
+disabled-autonomy smoke cycles, lesson ledger entries, strategy scorecards, and end-of-day
+review. The ledger at `data/notes/learning_ledger.md` and goals under
+`data/notes/agent_goals/` are runtime memory only; they do not train models, modify code,
+or change trading permissions.
+
+The **Data Tools** page shows which market/account/evidence sources are configured. Hermes
+or Ollama does not have internet by default; the app must fetch and pass data into prompts,
+and agents are instructed not to invent missing market or news facts.
+
+Optional Windows launcher:
+
+```bash
+python scripts/launch_desktop_app.py
+# optional EXE wrapper:
+pip install pyinstaller pywebview
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_launcher.ps1
+```
+
+The launcher only starts Streamlit. It is not the trading engine, does not include secrets, and does not bypass any safety gate. See `docs/user_quickstart.md` and `docs/dashboard_setup.md`.
