@@ -205,6 +205,17 @@ python -m src.main discord-bot
 
 See `docs/discord_bot_setup.md` for beginner setup steps. The bot supports natural chat in configured `#team-alpha` and `#team-beta` channels. It also supports `!status`, `!teams`, `!team_paper_status`, `!team_positions`, `!review_proposals`, `!run_tournament`, `!ask_team`, `!ask_agent`, `!latest_agent_run`, `!paper_trade_team`, `!team_report`, `!autonomy_status`, `!enable_autonomy`, `!disable_autonomy`, `!run_team_cycle`, `!schedule_reports_status`, and `!daily_team_report_now`, plus slash commands when Discord sync succeeds.
 
+### Local dashboard (Phase 7H)
+
+Launch the local-only Streamlit operator console for monitoring and control:
+
+```bash
+pip install streamlit          # one-time, if not already installed
+python -m src.main dashboard   # or: streamlit run src/ui/dashboard.py
+```
+
+The dashboard is a **local-only, paper-only** operator console — not a public web app and not live trading. It shows each team's autonomy/mode/caps, latest proposal and risk/review notes, the execution-eligible / simulation-only / rejected split, parsed approvals, and Alpaca paper status when credentials are configured. It can enable/disable autonomy, run a team cycle through the **same gated path** Discord uses, and includes a "Disable all autonomy" kill switch. It never displays secrets and never bypasses the risk/review/deterministic gates. See `docs/dashboard_setup.md` for details and recommended first-test caps.
+
 Ask a configured Hermes team for proposal JSON from Discord:
 
 ```text

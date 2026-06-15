@@ -387,6 +387,26 @@ def run_discord_bot_cli() -> None:
     run_discord_bot()
 
 
+def run_dashboard_cli() -> None:
+    """Launch the local-only Streamlit operator dashboard (paper-only, no live trading)."""
+
+    import subprocess
+    import sys
+
+    dashboard_path = Path(__file__).resolve().parent / "ui" / "dashboard.py"
+    print("Starting the ExaltedFable local dashboard (paper-only; no live trading).")
+    print(f"If the browser does not open automatically, run: streamlit run {dashboard_path}")
+
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        print("Streamlit is not installed. Install it first with: pip install streamlit")
+        print(f"Then run: streamlit run {dashboard_path}")
+        raise SystemExit(1)
+
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(dashboard_path)], check=False)
+
+
 def run_create_analysis_note(
     output_dir: Path | str = Path("data/experiments"),
     notes_dir: Path | str = Path("data/notes"),
@@ -855,6 +875,10 @@ def main() -> None:
         "discord-bot",
         help="Run the safe local Discord command-center bot",
     )
+    subparsers.add_parser(
+        "dashboard",
+        help="Launch the local-only Streamlit operator dashboard (paper-only)",
+    )
 
     args = parser.parse_args()
 
@@ -950,6 +974,8 @@ def main() -> None:
         run_strategy_status(registry_path=args.registry_path)
     elif args.command == "discord-bot":
         run_discord_bot_cli()
+    elif args.command == "dashboard":
+        run_dashboard_cli()
     else:
         raise ValueError(f"Unknown command: {args.command}")
 
