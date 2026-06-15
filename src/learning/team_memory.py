@@ -46,6 +46,9 @@ class TeamLearningLedger:
     risk_notes: list[str] = field(default_factory=list)
     strategy_changes: list[str] = field(default_factory=list)
     alpha_vs_beta_comparison: str = ""
+    # Phase 7M strategy-memory feedback (compact, no secrets).
+    mode: str = ""  # exploration | conservation
+    avoid_next_cycle: list[str] = field(default_factory=list)
     reviews: list[CycleReview] = field(default_factory=list)
     updated_at: str = ""
 
@@ -98,6 +101,8 @@ def update_team_learning(
     watchlist: list[str] | None = None,
     rejected_ideas: list[str] | None = None,
     alpha_vs_beta: str | None = None,
+    mode: str | None = None,
+    avoid_next_cycle: list[str] | None = None,
     learning_dir: Path | str = DEFAULT_LEARNING_DIR,
 ) -> TeamLearningLedger:
     """Load, update, and persist a team's learning ledger after a cycle."""
@@ -115,6 +120,14 @@ def update_team_learning(
                 ledger.rejected_ideas.append(idea)
     if alpha_vs_beta is not None:
         ledger.alpha_vs_beta_comparison = alpha_vs_beta
+    if mode is not None:
+        ledger.mode = mode
+    if avoid_next_cycle:
+        # Keep a compact, de-duplicated tail (cost control).
+        for item in avoid_next_cycle:
+            if item and item not in ledger.avoid_next_cycle:
+                ledger.avoid_next_cycle.append(item)
+        ledger.avoid_next_cycle = ledger.avoid_next_cycle[-10:]
     ledger.record_cycle(review)
     ledger.save(learning_dir)
     return ledger

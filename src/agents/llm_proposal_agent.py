@@ -73,6 +73,21 @@ _SHARED_RULES = (
     "- Use only the provided context. If a fact is unavailable, say 'unknown'. Never invent prices or news.\n"
     "- Review the prior scorecard, team memory, and performance_feedback (recent winners/losers, "
     "best/worst symbols and strategies), and explain in learning_update what changed from last cycle.\n"
+    "- performance_feedback.outcome_feedback reports recent worked/failed proposals, common winning/losing "
+    "themes, and SPY-relative performance from actual paper outcomes. Treat it as RESEARCH FEEDBACK ONLY: it "
+    "informs your next ideas but never authorizes bypassing risk, position sizing, credentials, or the kill "
+    "switch. The deterministic risk engine still gates and sizes every trade.\n"
+    "- PORTFOLIO MANAGER FIRST. Before proposing trades, review the current portfolio, buying power, prior "
+    "theses, attribution outcomes, and SPY-relative performance, then decide whether to hold, trim, close, "
+    "rotate, add, hedge, reduce exposure, or do nothing. Put this in a 'portfolio_decision' object. Briefly "
+    "answer in its 'rationale': why are we beating/losing to SPY? which positions/sectors drove it? did the "
+    "prior thesis work/fail/stay unproven? what changed since last cycle? is the new idea better than the "
+    "weakest current holding? should we hold and observe? Keep it to 2-4 sentences.\n"
+    "- Doing NOTHING (decision_type 'no_trade' or 'hold') is a valid, successful outcome. Only propose NEW "
+    "trades when an idea clearly beats the weakest current holding. Set 'max_new_proposals_this_cycle' (0-3) "
+    "and 'allowed_to_generate_new_orders'. If buying power is low, prefer trim/close/rotate or an explicit "
+    "'increase_margin_exposure_request' instead of new-money buys; the platform may still block or downsize "
+    "new buys. You may set tactical thresholds, but platform hard caps always win.\n"
     "- Allowed asset_type values: stock_long, stock_short, margin_stock_long, margin_stock_short, "
     "option_long_call, option_long_put, option_debit_spread, option_defined_risk_spread.\n"
     "- Keep proposals within a small, sane size (target_weight <= 0.15).\n"
@@ -87,7 +102,11 @@ _SCHEMA_HINT = (
     '"invalidation_condition": "...", "risk_notes": "...", "data_sources_used": ["alpaca_quote"], '
     '"data_freshness": "live", "research_source_ids": ["r1"], "research_changed_proposal": true}], '
     '"learning_update": {"what_worked": "...", "what_failed": "...", '
-    '"next_adjustment": "..."}, "hypothesis": "...", "watchlist": ["SPY"]}'
+    '"next_adjustment": "..."}, "hypothesis": "...", "watchlist": ["SPY"], '
+    '"portfolio_decision": {"decision_type": "hold|no_trade|trim|close|rotate|add|reduce_gross_exposure|'
+    'increase_margin_exposure_request|hedge", "affected_symbols": ["SPY"], "rationale": "...", '
+    '"allowed_to_generate_new_orders": true, "max_new_proposals_this_cycle": 2, '
+    '"proposed_closes_or_trims": [], "rejected_new_ideas_reason": null}}'
 )
 
 
@@ -95,16 +114,20 @@ def build_system_prompt(team_id: str) -> str:
     if team_id == "team_alpha":
         mandate = (
             "You are the lead strategist for TEAM ALPHA in a paper-only trading competition.\n"
-            "MANDATE: aggressive growth. You hunt momentum, breakouts, and catalysts. You are "
+            "MANDATE: aggressive growth, EXPLORATION mode. You hunt momentum, breakouts, and catalysts. You are "
             "willing to use shorts, margin ideas, and defined-risk options to maximize risk-adjusted "
-            "upside. You aim to BEAT Team Beta and SPY."
+            "upside. You are higher-variance: more willing to rotate out of weak holdings into new catalyst/"
+            "momentum ideas, and you learn fast from outcomes. You aim to BEAT Team Beta and SPY. "
+            "You still obey every risk/exposure/kill-switch rule."
         )
     elif team_id == "team_beta":
         mandate = (
             "You are the lead strategist for TEAM BETA in a paper-only trading competition.\n"
-            "MANDATE: contrarian, risk-adjusted. You favor mean reversion, hedging, and capital "
-            "preservation. You use shorts and defined-risk options to fade extremes and manage "
-            "drawdown. You aim to BEAT Team Alpha and SPY with steadier returns."
+            "MANDATE: contrarian, risk-adjusted, CONSERVATION mode. You favor mean reversion, hedging, and capital "
+            "preservation. You are lower-variance: you trade less, prefer hold/trim decisions, prioritize "
+            "drawdown control and SPY-relative steadiness, and only add new exposure with strong justification. "
+            "You use shorts and defined-risk options to fade extremes and manage drawdown. You aim to BEAT "
+            "Team Alpha and SPY with steadier returns."
         )
     else:
         mandate = f"You are the lead strategist for {team_id} in a paper-only trading competition."
@@ -345,6 +368,9 @@ def generate_llm_proposals(
     learning_update = data.get("learning_update") if isinstance(data.get("learning_update"), dict) else None
     watchlist = data.get("watchlist") if isinstance(data.get("watchlist"), list) else None
     research_notes = data.get("research_notes") if isinstance(data.get("research_notes"), list) else None
+    portfolio_decision = (
+        data.get("portfolio_decision") if isinstance(data.get("portfolio_decision"), dict) else None
+    )
 
     return ProposalBundle(
         proposals=proposals,
@@ -357,4 +383,5 @@ def generate_llm_proposals(
         raw_errors=errors,
         proposal_source_ids=proposal_source_ids,
         research_source_ids=sorted(all_source_ids),
+        portfolio_decision=portfolio_decision,
     )

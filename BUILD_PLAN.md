@@ -1143,6 +1143,40 @@ Delivered:
 - `src/research/data_tools.py` — allowlisted, provenance-tagged, read-only research tools.
 - `src/agents/llm_provider.py` — OpenAI/Anthropic/Ollama abstraction, structured JSON only.
 - UI pages, Discord commands, CLI commands, comprehensive mocked tests, and docs.
+- `src/competition/attribution.py` — proposal/trade attribution + an outcome refresh system
+  (`refresh-proposal-attribution`). Refresh re-scores pending outcomes against the latest paper
+  prices + the SPY benchmark (safe market-data wrapper; team credentials only), persisting
+  `current_price`, `unrealized_pnl`, `return_pct`, `spy_start_price`/`spy_current_price`,
+  `spy_return_pct`, `excess_return_pct`, `outcome_status` (pending/worked/failed/mixed), and
+  `refreshed_at`. SPY-relative verdict around a small configurable threshold; missing
+  entry/price, unavailable SPY, or options stay pending with a skip reason. Backward-compatible
+  JSONL (old rows load; new fields default), rewritten atomically. A compact "recent outcome
+  feedback" block feeds the next LLM cycle as research feedback only (never bypasses risk).
 
 Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no
 order submission from chat/Agent Hub/ask/UI surfaces.
+
+## Phase 7M - Portfolio Manager / Capital Allocator
+
+Goal: stop blindly generating new trades every cycle. Teams first review the portfolio and decide
+whether to hold, trim, close, rotate, add, hedge, reduce exposure, request margin, or do nothing.
+
+Delivered:
+
+- `src/competition/portfolio_manager.py` — `PortfolioDecisionType`, `PortfolioDecision`,
+  `PortfolioManagerConfig` (env-driven cost control), and a deterministic `review_portfolio`. Team
+  personalities (alpha = higher-variance exploration; beta = conservative conservation), dynamic
+  proposal caps (0–3), buying-power-aware gating, and no-trade as a first-class outcome. An optional
+  LLM intent can only narrow behavior — never widen caps, unblock low-BP buys, or bypass hard caps.
+- `src/competition/week_competition.py` — Portfolio Manager stage (4b) + dynamic-cap gate (6b) wired
+  into the 11-stage cycle; `apply_portfolio_gate` demotes over-cap/blocked opens to advisory
+  `simulation_only`; `CycleResult.no_trade`; scorecard + strategy-memory (mode, avoid-next-cycle) fields.
+- `src/competition/execution.py` — `classify_broker_error` + `broker_rejected`/`broker_reject_reason`/
+  `broker_reject_code`/`failure_category` on `ExecutionRecord`, flowing into attribution + PM context.
+- Prompt self-review questions + a `portfolio_decision` schema in `src/agents/llm_proposal_agent.py`.
+- CLI: `run-week-cycle` prints the decision and "No trade decision"; `week-competition-status`,
+  `proposal-attribution`, and `team-learning-status` surface PM/broker-rejection fields.
+- Deterministic mocked tests (no network/credentials/market hours) and docs.
+
+Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no
+order submission from chat/Agent Hub/ask/UI surfaces, no weakening of hard risk caps.

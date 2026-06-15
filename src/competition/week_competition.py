@@ -38,9 +38,19 @@ from src.competition.proposals import (
     OptionType,
     ProposalType,
 )
-from src.competition.attribution import ProposalAttribution, record_attributions
-from src.competition.risk_engine import AccountContext
-from src.competition.router import RoutingResult, route_proposals
+from src.competition.attribution import (
+    DEFAULT_ATTRIBUTION_DIR,
+    ProposalAttribution,
+    performance_feedback,
+    record_attributions,
+)
+from src.competition.portfolio_manager import (
+    PortfolioDecision,
+    PortfolioManagerConfig,
+    review_portfolio,
+)
+from src.competition.risk_engine import AccountContext, AdvancedRiskDecision, Route
+from src.competition.router import RoutedProposal, RoutingResult, route_proposals
 from src.competition.scorecard import (
     DEFAULT_SCORECARD_DIR,
     TeamScorecard,
@@ -260,12 +270,66 @@ class ProposalBundle:
     # proposal_id -> research source ids the model cited for it (Task 5/7).
     proposal_source_ids: dict[str, list[str]] = field(default_factory=dict)
     research_source_ids: list[str] = field(default_factory=list)
+    # Optional LLM tactical intent for the Portfolio Manager (Phase 7M, advisory only).
+    portfolio_decision: dict | None = None
 
 
 def _as_bundle(result) -> ProposalBundle:
     if isinstance(result, ProposalBundle):
         return result
     return ProposalBundle(proposals=list(result))
+
+
+def _demote_to_simulation(routed: RoutedProposal, reason: str) -> RoutedProposal:
+    """Return a copy of ``routed`` re-routed to simulation_only with a reason."""
+
+    decision = routed.decision
+    new_decision = AdvancedRiskDecision(
+        proposal_id=decision.proposal_id,
+        proposal_type=decision.proposal_type,
+        level=decision.level,
+        route=Route.SIMULATION_ONLY,
+        approved=False,
+        reasons=[*decision.reasons, reason],
+        approved_quantity=decision.approved_quantity,
+        approved_contracts=decision.approved_contracts,
+        approved_notional=decision.approved_notional,
+        premium_at_risk=decision.premium_at_risk,
+    )
+    return RoutedProposal(proposal=routed.proposal, decision=new_decision)
+
+
+def apply_portfolio_gate(routing: RoutingResult, decision: PortfolioDecision) -> RoutingResult:
+    """Enforce the Portfolio Manager decision on routed proposals.
+
+    New-money buys (execution_eligible) beyond ``max_new_proposals_this_cycle``
+    — or all of them when the team is in a no-trade/blocked state — are demoted
+    to simulation_only (advisory) with a clear reason. This never *promotes*
+    anything and never bypasses the deterministic risk engine.
+    """
+
+    eligible = list(routing.execution_eligible)
+    if not eligible:
+        return routing
+
+    limit = decision.max_new_proposals_this_cycle if decision.allowed_to_generate_new_orders else 0
+    if limit >= len(eligible):
+        return routing
+
+    # Keep the highest-confidence ideas; demote the rest to advisory.
+    eligible.sort(key=lambda r: r.proposal.confidence, reverse=True)
+    kept = eligible[:limit]
+    demoted = eligible[limit:]
+    reason = (
+        f"Portfolio manager: {decision.decision_type} "
+        f"(new-order cap {limit}; {decision.rejected_new_ideas_reason or 'capital allocation'})."
+    )
+    demoted_sim = [_demote_to_simulation(r, reason) for r in demoted]
+    return RoutingResult(
+        execution_eligible=kept,
+        simulation_only=[*routing.simulation_only, *demoted_sim],
+        rejected=list(routing.rejected),
+    )
 
 
 @dataclass
@@ -277,6 +341,13 @@ class CycleResult:
     stage_log: list[str]
     kill_switch_engaged: bool
     bundle: "ProposalBundle | None" = None
+    portfolio_decision: "PortfolioDecision | None" = None
+
+    @property
+    def no_trade(self) -> bool:
+        if self.portfolio_decision is not None:
+            return self.portfolio_decision.is_no_trade()
+        return sum(1 for r in self.execution_records if r.submitted) == 0
 
     def summary(self) -> dict[str, object]:
         return {
@@ -284,6 +355,10 @@ class CycleResult:
             "routing": self.routing.summary(),
             "orders_submitted": sum(1 for r in self.execution_records if r.submitted),
             "kill_switch_engaged": self.kill_switch_engaged,
+            "portfolio_decision": (
+                self.portfolio_decision.decision_type if self.portfolio_decision else None
+            ),
+            "no_trade": self.no_trade,
         }
 
 
@@ -310,16 +385,29 @@ def _record_cycle_attribution(
     for routing_label, group in routed_groups:
         for routed in group:
             proposal = routed.proposal
+            decision = routed.decision
             record = exec_by_id.get(proposal.proposal_id)
             order_id = None
             submitted = False
             lesson = None
+            broker_rejected = False
+            broker_reject_reason = None
+            broker_reject_code = None
+            failure_category = None
             if record is not None:
                 submitted = record.submitted
                 raw_order_id = getattr(record.broker_response, "id", None) if record.broker_response else None
                 order_id = str(raw_order_id) if raw_order_id is not None else None
+                broker_rejected = record.broker_rejected
+                broker_reject_reason = record.broker_reject_reason
+                broker_reject_code = record.broker_reject_code
+                failure_category = record.failure_category
                 if not record.submitted and not record.dry_run:
                     lesson = record.detail
+            # Approved sizing comes from the deterministic risk engine, never the model.
+            quantity = decision.approved_quantity
+            if quantity is None and decision.approved_contracts is not None:
+                quantity = float(decision.approved_contracts)
             entries.append(
                 ProposalAttribution(
                     proposal_id=proposal.proposal_id,
@@ -333,9 +421,16 @@ def _record_cycle_attribution(
                     research_source_ids=bundle.proposal_source_ids.get(proposal.proposal_id, []),
                     routing=routing_label,
                     broker_submitted=submitted,
+                    broker_rejected=broker_rejected,
+                    broker_reject_reason=broker_reject_reason,
+                    broker_reject_code=broker_reject_code,
+                    failure_category=failure_category,
                     order_id=order_id,
+                    action=proposal.action,
+                    quantity=(float(quantity) if quantity is not None else None),
                     entry_price=proposal.estimated_price,
                     position_status=("open" if submitted else "none"),
+                    holding_period=proposal.intended_holding_period,
                     spy_return=spy_return_pct,
                     thesis_outcome="pending",
                     lesson_learned=lesson or (llm_update.get("what_failed") if routing_label == "rejected" else None),
@@ -361,6 +456,8 @@ def run_week_cycle(
     spy_return_pct: float | None = None,
     spy_provenance: DataProvenance = DataProvenance.UNKNOWN,
     attribution_dir: Path | str | None = None,
+    portfolio_config: PortfolioManagerConfig | None = None,
+    positions: list | None = None,
 ) -> CycleResult:
     stage_log: list[str] = []
     ks_engaged = is_engaged(kill_switch_path)
@@ -382,14 +479,47 @@ def run_week_cycle(
     # Stage 4: critique (deterministic note; never changes sizing).
     stage_log.append("Stage 4: critiqued proposals (advisory only).")
 
+    # Stage 4b: Portfolio Manager / Capital Allocator review (Phase 7M).
+    pm_config = portfolio_config or PortfolioManagerConfig.from_env()
+    pm_attribution_dir = attribution_dir if attribution_dir is not None else DEFAULT_ATTRIBUTION_DIR
+    prior_scorecard = load_latest_scorecard(team_id, scorecard_dir)
+    try:
+        attribution_feedback = performance_feedback(team_id, attribution_dir=pm_attribution_dir)
+    except Exception:  # noqa: BLE001 - missing/old attribution must never crash the cycle
+        attribution_feedback = {}
+    portfolio_decision = review_portfolio(
+        team_id=team_id,
+        config=pm_config,
+        permissions=permissions,
+        account=account,
+        candidate_count=len(proposals),
+        spy_excess=(prior_scorecard.excess_return_vs_spy if prior_scorecard else None),
+        team_return=(prior_scorecard.team_return if prior_scorecard else None),
+        spy_return=spy_return_pct,
+        attribution_feedback=attribution_feedback,
+        positions=positions,
+        llm_intent=bundle.portfolio_decision,
+    )
+    stage_log.append(
+        f"Stage 4b: portfolio manager decided {portfolio_decision.summary()}."
+    )
+    if portfolio_decision.low_buying_power:
+        stage_log.append("Stage 4b: low buying power -> portfolio review (cycle not hard-stopped).")
+    if portfolio_decision.rejected_new_ideas_reason:
+        stage_log.append(f"Stage 4b: new-money buys blocked: {portfolio_decision.rejected_new_ideas_reason}")
+
     # Stage 5-6: risk review + deterministic validation via router.
     routing = route_proposals(proposals, permissions, account)
+    # Stage 6b: apply the Portfolio Manager dynamic cap (demotes extra opens to advisory).
+    routing = apply_portfolio_gate(routing, portfolio_decision)
     stage_log.append(
         "Stage 5-6: routed proposals -> "
         f"execution_eligible={len(routing.execution_eligible)}, "
         f"simulation_only={len(routing.simulation_only)}, "
         f"rejected={len(routing.rejected)}."
     )
+    if portfolio_decision.is_no_trade():
+        stage_log.append("Stage 6b: NO-TRADE decision — no new broker orders this cycle (valid outcome).")
 
     # Stage 7: paper execution (only if not killed).
     if ks_engaged:
@@ -409,6 +539,7 @@ def run_week_cycle(
     stage_log.append("Stage 8: monitored open positions.")
 
     orders_submitted = sum(1 for r in execution_records if r.submitted)
+    broker_rejected_count = sum(1 for r in execution_records if r.broker_rejected)
     premium_at_risk = sum(
         (r.decision.premium_at_risk or 0.0) for r in routing.execution_eligible
     )
@@ -433,6 +564,10 @@ def run_week_cycle(
         rejected_count=len(routing.rejected),
         simulation_only_count=len(routing.simulation_only),
         orders_submitted=orders_submitted,
+        broker_rejected_count=broker_rejected_count,
+        portfolio_decision_type=portfolio_decision.decision_type,
+        portfolio_no_trade=portfolio_decision.is_no_trade(),
+        max_new_proposals=portfolio_decision.max_new_proposals_this_cycle,
     )
     stage_log.append("Stage 9: built post-cycle scorecard.")
 
@@ -461,6 +596,17 @@ def run_week_cycle(
     if bundle.market_summary:
         post_trade_reviews.append(f"LLM market summary: {bundle.market_summary}")
 
+    # Portfolio Manager decision folds into the team's compact strategy memory.
+    changes.append(f"Portfolio manager: {portfolio_decision.decision_type} (cap {portfolio_decision.max_new_proposals_this_cycle}).")
+    avoid_next_cycle: list[str] = []
+    if portfolio_decision.rejected_new_ideas_reason:
+        avoid_next_cycle.append(portfolio_decision.rejected_new_ideas_reason)
+    for record in execution_records:
+        if record.broker_rejected:
+            avoid_next_cycle.append(
+                f"{record.symbol}: broker {record.failure_category} ({record.broker_reject_reason})"
+            )
+
     cycle_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     review = CycleReview(
         cycle_id=cycle_id,
@@ -486,6 +632,8 @@ def run_week_cycle(
         hypothesis=bundle.hypothesis,
         watchlist=bundle.watchlist,
         rejected_ideas=bundle.rejected_ideas or None,
+        mode=portfolio_decision.mode or None,
+        avoid_next_cycle=avoid_next_cycle or None,
         **learn_kwargs,
     )
     scorecard.latest_lessons = ledger.latest_lessons()
@@ -516,6 +664,7 @@ def run_week_cycle(
         stage_log=stage_log,
         kill_switch_engaged=ks_engaged,
         bundle=bundle,
+        portfolio_decision=portfolio_decision,
     )
 
 

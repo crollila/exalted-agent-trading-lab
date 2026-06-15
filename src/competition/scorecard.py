@@ -38,6 +38,10 @@ class TeamScorecard:
     rejected_count: int = 0
     simulation_only_count: int = 0
     orders_submitted: int = 0
+    broker_rejected_count: int = 0
+    portfolio_decision_type: str | None = None
+    portfolio_no_trade: bool = False
+    max_new_proposals: int | None = None
     current_rank: int | None = None
     latest_lessons: list[str] = field(default_factory=list)
     strategy_changes: list[str] = field(default_factory=list)

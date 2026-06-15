@@ -32,9 +32,15 @@ from src.brokers.paper_auth import (
 )
 from src.agents.llm_provider import LLMProviderError, build_provider
 from src.competition.llm_cycle import build_llm_proposal_source
+from src.competition.portfolio_manager import PortfolioManagerConfig
 from src.competition.proposals import DataProvenance
 from src.competition.risk_engine import AccountContext
-from src.competition.attribution import load_team_attribution, performance_feedback
+from src.competition.attribution import (
+    default_outcome_threshold,
+    load_team_attribution,
+    performance_feedback,
+    refresh_team_attribution,
+)
 from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
 from src.research.research import build_alpaca_news_fn, build_openai_web_fn
 from src.research.research_config import ResearchConfig
@@ -381,6 +387,15 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
             print(f"(Team broker unavailable: {exc}; running without live submission.)")
             client = None
 
+    # Portfolio Manager context: current positions (read-only; degrades to empty).
+    positions = None
+    try:
+        from src.research.data_tools import alpaca_positions
+
+        positions = alpaca_positions(context_client).value or []
+    except Exception:  # noqa: BLE001 - positions are best-effort context only
+        positions = None
+
     result = run_week_cycle(
         team,
         permissions=permissions,
@@ -390,6 +405,8 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
         dry_run=settings.dry_run,
         spy_return_pct=spy_return_pct,
         spy_provenance=spy_provenance,
+        portfolio_config=PortfolioManagerConfig.from_env(),
+        positions=positions,
     )
     print(f"Ran week cycle for {team} (dry_run={settings.dry_run}, proposal_source={source_name}).")
     for line in result.stage_log:
@@ -401,10 +418,28 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
         print(f"LLM proposals rejected during parsing: {len(bundle.raw_errors)}")
         for err in bundle.raw_errors:
             print(f"  - rejected: {err}")
+    decision = result.portfolio_decision
+    if decision is not None:
+        print(f"Portfolio manager: {decision.decision_type} (mode={decision.mode})")
+        print(f"  rationale: {decision.rationale}")
+        print(f"  SPY-relative: {decision.relation_to_spy_performance}")
+        print(f"  attribution: {decision.relation_to_recent_attribution}")
+        print(f"  buying power: {decision.buying_power_impact}")
+        print(
+            f"  allowed new orders: {decision.allowed_to_generate_new_orders} "
+            f"(max {decision.max_new_proposals_this_cycle})"
+        )
+        if result.no_trade:
+            print(f"No trade decision: {decision.rejected_new_ideas_reason or decision.rationale}")
     print(f"Routing: {result.routing.summary()}")
     if spy_return_pct is not None:
         print(f"SPY return this cycle: {spy_return_pct:.4f}")
     print(f"Orders submitted: {sum(1 for r in result.execution_records if r.submitted)}")
+    broker_rejections = [r for r in result.execution_records if r.broker_rejected]
+    if broker_rejections:
+        print(f"Broker rejections: {len(broker_rejections)}")
+        for record in broker_rejections:
+            print(f"  ! {record.symbol}: {record.failure_category} — {record.broker_reject_reason}")
     for record in result.execution_records:
         print(f"  - {record.symbol} [{record.proposal_type}]: {record.detail}")
 
@@ -445,15 +480,109 @@ def run_proposal_attribution(team: str) -> None:
     print(f"Pending outcomes: {feedback['pending_count']}")
     print("Recent winners:", feedback["recent_winners"] or "(none)")
     print("Recent losers:", feedback["recent_losers"] or "(none)")
+    refreshed_total = sum(1 for e in entries if e.refreshed_at is not None)
+    print(f"Refreshed outcomes: {refreshed_total} (run refresh-proposal-attribution to update)")
+    broker_rejected = [e for e in entries if e.broker_rejected]
+    if broker_rejected:
+        print(f"Broker rejections: {len(broker_rejected)}")
+        for entry in broker_rejected[-5:]:
+            print(
+                f"  ! {entry.symbol} [{entry.asset_type}] "
+                f"category={entry.failure_category} reason={entry.broker_reject_reason}"
+            )
     print("Recent entries:")
     for entry in entries[-10:]:
         ret = "pending" if entry.return_pct is None else f"{entry.return_pct:.4f}"
-        excess = "n/a" if entry.excess_return_vs_spy is None else f"{entry.excess_return_vs_spy:.4f}"
-        print(
+        excess = "n/a" if entry.excess_return_pct is None else f"{entry.excess_return_pct:.4f}"
+        current = "n/a" if entry.current_price is None else f"{entry.current_price:.2f}"
+        refreshed = "never" if entry.refreshed_at is None else entry.refreshed_at
+        line = (
             f"  - {entry.symbol} [{entry.asset_type}] routing={entry.routing} "
-            f"submitted={entry.broker_submitted} outcome={entry.thesis_outcome} "
-            f"return={ret} excessVsSPY={excess} sources={entry.research_source_ids}"
+            f"submitted={entry.broker_submitted} outcome={entry.outcome_status} "
+            f"return={ret} excessVsSPY={excess} current={current} refreshed={refreshed} "
+            f"sources={entry.research_source_ids}"
         )
+        if entry.broker_rejected:
+            line += f" broker_rejected={entry.failure_category}:{entry.broker_reject_reason}"
+        if entry.refresh_skip_reason:
+            line += f" skip={entry.refresh_skip_reason}"
+        print(line)
+
+
+def _refresh_spy_prices(settings: Settings, price_fn) -> tuple[float | None, float | None]:
+    """Resolve (spy_start_price, spy_current_price) reusing the recorded benchmark.
+
+    The competition's recorded starting SPY price is the holding-period baseline;
+    the current SPY price comes from the same safe market-data wrapper. Either may
+    be None (degrades to a pending SPY-relative outcome, never invented).
+    """
+
+    state = load_competition_state()
+    spy_start_price = state.starting_spy_price
+    spy_current_price, _ = latest_price("SPY", price_fn)
+    return spy_start_price, spy_current_price
+
+
+def run_refresh_proposal_attribution(team: str | None = None, threshold: float | None = None) -> None:
+    settings = Settings.from_env()
+    teams = [team] if team else list(WEEK_TEAMS)
+    outcome_threshold = threshold if threshold is not None else default_outcome_threshold()
+
+    price_fn = _market_data_price_fn(settings)
+    if price_fn is None:
+        print("=== Refresh proposal attribution (paper-only) ===")
+        print(
+            "Market data unavailable: no working Alpaca credential source could fetch prices. "
+            "Outcomes stay pending; no records were changed. (Team credentials are sufficient; "
+            "global credentials are not required.)"
+        )
+        raise SystemExit(1)
+
+    spy_start_price, spy_current_price = _refresh_spy_prices(settings, price_fn)
+
+    print("=== Refresh proposal attribution (paper-only; research feedback only) ===")
+    print(f"Outcome threshold (|excess vs SPY|): {outcome_threshold:.4f}")
+    if spy_start_price is None:
+        print("(No starting SPY price recorded; SPY-relative outcomes stay pending. Run start-week-competition.)")
+    elif spy_current_price is None:
+        print("(SPY current price unavailable; SPY-relative outcomes stay pending.)")
+
+    for tid in teams:
+        summary = refresh_team_attribution(
+            tid,
+            price_fn=price_fn,
+            spy_start_price=spy_start_price,
+            spy_current_price=spy_current_price,
+            threshold=outcome_threshold,
+        )
+        print("")
+        print(f"--- {tid} ---")
+        print(f"Records scanned: {summary.scanned}")
+        print(f"Records refreshed (scored): {summary.refreshed}")
+        print(f"Records still pending: {summary.pending}")
+        print(f"Worked: {summary.worked} | Failed: {summary.failed} | Mixed: {summary.mixed}")
+        spy_text = "unknown" if summary.spy_return_pct is None else f"{summary.spy_return_pct:.4f}"
+        print(f"SPY return over period: {spy_text}")
+        if summary.best is not None:
+            print(
+                f"Best proposal by excess: {summary.best.symbol} [{summary.best.asset_type}] "
+                f"excessVsSPY={summary.best.excess_return_pct:.4f}"
+            )
+        else:
+            print("Best proposal by excess: (none scored yet)")
+        if summary.worst is not None:
+            print(
+                f"Worst proposal by excess: {summary.worst.symbol} [{summary.worst.asset_type}] "
+                f"excessVsSPY={summary.worst.excess_return_pct:.4f}"
+            )
+        else:
+            print("Worst proposal by excess: (none scored yet)")
+        if summary.skipped:
+            print(f"Skipped symbols ({len(summary.skipped)}):")
+            for skip in summary.skipped[:10]:
+                print(f"  - {skip.symbol} [{skip.proposal_id}]: {skip.reason}")
+        else:
+            print("Skipped symbols: (none)")
 
 
 def run_week_competition_status() -> None:
@@ -479,6 +608,26 @@ def run_week_competition_status() -> None:
             f"orders={card['orders_submitted']} approved={card['approved_count']} "
             f"sim_only={card['simulation_only_count']} rejected={card['rejected_count']}"
         )
+        pm_type = card.get("portfolio_decision_type")
+        if pm_type:
+            no_trade = card.get("portfolio_no_trade")
+            print(
+                f"    portfolio manager: {pm_type} "
+                f"(no_trade={no_trade}, max_new={card.get('max_new_proposals')}, "
+                f"broker_rejected={card.get('broker_rejected_count', 0)})"
+            )
+        # Brief attribution outcome summary (refreshed via refresh-proposal-attribution).
+        ofb = performance_feedback(card["team_id"]).get("outcome_feedback", {})
+        if ofb.get("refreshed_count"):
+            avg_excess = ofb.get("avg_excess_return_vs_spy")
+            avg_text = "n/a" if avg_excess is None else f"{avg_excess:.4f}"
+            print(
+                f"    attribution outcomes: worked={ofb.get('worked_count', 0)} "
+                f"failed={ofb.get('failed_count', 0)} mixed={ofb.get('mixed_count', 0)} "
+                f"pending={ofb.get('pending_count', 0)} avgExcessVsSPY={avg_text}"
+            )
+        else:
+            print("    attribution outcomes: none refreshed yet (run refresh-proposal-attribution)")
 
 
 def run_stop_week_competition() -> None:
@@ -491,7 +640,12 @@ def run_team_learning_status(team: str) -> None:
     print(f"=== Team learning ledger: {team} ===")
     print(f"Current hypothesis: {ledger.current_hypothesis or '(none)'}")
     print(f"Active strategy: {ledger.active_strategy or '(none)'}")
+    print(f"Mode: {ledger.mode or '(none)'}")
     print(f"Watchlist: {', '.join(ledger.watchlist) or '(none)'}")
+    if ledger.avoid_next_cycle:
+        print(f"Avoid next cycle ({len(ledger.avoid_next_cycle)}):")
+        for item in ledger.avoid_next_cycle[-10:]:
+            print(f"  - {item}")
     print(f"Lessons learned ({len(ledger.lessons_learned)}):")
     for lesson in ledger.latest_lessons(10):
         print(f"  - {lesson}")
@@ -1423,6 +1577,25 @@ def main() -> None:
         help="Show proposal/trade effectiveness attribution for a team",
     )
     attribution_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to show.")
+    refresh_attr_parser = subparsers.add_parser(
+        "refresh-proposal-attribution",
+        help="Refresh pending proposal outcomes with latest prices + SPY benchmark (paper-only)",
+    )
+    refresh_attr_parser.add_argument(
+        "--team",
+        choices=WEEK_TEAMS,
+        default=None,
+        help="Optional team filter. Defaults to refreshing both teams.",
+    )
+    refresh_attr_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help=(
+            "Excess-return threshold for worked/failed/mixed verdicts. "
+            "Defaults to env ATTRIBUTION_OUTCOME_THRESHOLD, then 0.005."
+        ),
+    )
     subparsers.add_parser("start-week-competition", help="Start the Alpha vs Beta weekly paper competition")
     week_cycle_parser = subparsers.add_parser("run-week-cycle", help="Run one gated paper cycle for a team")
     week_cycle_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to run a cycle for.")
@@ -1553,6 +1726,8 @@ def main() -> None:
         run_research_status()
     elif args.command == "proposal-attribution":
         run_proposal_attribution(team=args.team)
+    elif args.command == "refresh-proposal-attribution":
+        run_refresh_proposal_attribution(team=args.team, threshold=args.threshold)
     elif args.command == "start-week-competition":
         run_start_week_competition()
     elif args.command == "run-week-cycle":

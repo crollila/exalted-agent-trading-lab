@@ -23,6 +23,36 @@ from src.competition.router import RoutedProposal
 from src.safety.kill_switch import KillSwitchEngaged, is_engaged
 
 
+# Broker failure categories surfaced to attribution + the Portfolio Manager.
+FAILURE_INSUFFICIENT_BUYING_POWER = "insufficient_buying_power"
+FAILURE_WASH_TRADE = "wash_trade"
+FAILURE_BROKER_ERROR = "broker_error"
+FAILURE_UNKNOWN = "unknown"
+
+
+def classify_broker_error(exc: Exception) -> tuple[str, str, str | None]:
+    """Classify a broker submission failure into (category, reason, code).
+
+    Detection is text-based (Alpaca raises ``APIError`` with a message and an
+    optional numeric ``code``). Unknown failures fall back to ``broker_error``.
+    """
+
+    reason = str(exc).strip() or exc.__class__.__name__
+    low = reason.lower()
+    code = None
+    raw_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if raw_code is not None:
+        code = str(raw_code)
+
+    if "buying power" in low or "insufficient" in low and "power" in low:
+        category = FAILURE_INSUFFICIENT_BUYING_POWER
+    elif "wash" in low:
+        category = FAILURE_WASH_TRADE
+    else:
+        category = FAILURE_BROKER_ERROR
+    return category, reason, code
+
+
 @dataclass(frozen=True)
 class ExecutionRecord:
     proposal_id: str
@@ -32,6 +62,10 @@ class ExecutionRecord:
     dry_run: bool
     detail: str
     broker_response: Any | None = None
+    broker_rejected: bool = False
+    broker_reject_reason: str | None = None
+    broker_reject_code: str | None = None
+    failure_category: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -41,6 +75,10 @@ class ExecutionRecord:
             "submitted": self.submitted,
             "dry_run": self.dry_run,
             "detail": self.detail,
+            "broker_rejected": self.broker_rejected,
+            "broker_reject_reason": self.broker_reject_reason,
+            "broker_reject_code": self.broker_reject_code,
+            "failure_category": self.failure_category,
         }
 
 
@@ -208,6 +246,7 @@ def execute_routed_proposals(
                 )
             )
         except Exception as exc:  # noqa: BLE001 - log any broker/network failure; never fake a fill
+            category, reason, code = classify_broker_error(exc)
             records.append(
                 ExecutionRecord(
                     proposal_id=proposal.proposal_id,
@@ -215,7 +254,11 @@ def execute_routed_proposals(
                     symbol=symbol,
                     submitted=False,
                     dry_run=False,
-                    detail=f"Broker submission failed: {exc}",
+                    detail=f"Broker rejected submission ({category}): {reason}",
+                    broker_rejected=True,
+                    broker_reject_reason=reason,
+                    broker_reject_code=code,
+                    failure_category=category,
                 )
             )
 

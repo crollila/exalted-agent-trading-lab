@@ -60,6 +60,36 @@ The router produces three buckets:
 
 The deterministic risk engine — never the LLM — computes the approved quantity / contract count.
 
+### Portfolio Manager / Capital Allocator (Phase 7M)
+
+Before new trades execute, each team runs a deterministic Portfolio Manager review (controlled by
+`PORTFOLIO_MANAGER_ENABLED`, default true). It reviews the current book, buying power, prior theses,
+attribution outcomes, and SPY-relative performance, then decides to hold, trim, close, rotate, add,
+hedge, reduce exposure, request margin, or do nothing. Key rules:
+
+- **No-trade / hold is a valid, successful outcome** (`ALLOW_NO_TRADE_DECISIONS`, default true). A
+  no-trade cycle is not a failure: it still records a scorecard, memory, and attribution.
+- **Low buying power triggers a review, never a hard stop.** When buying power falls below
+  `LOW_BUYING_POWER_REVIEW_THRESHOLD_PCT` of equity (default 0.15), new-money buys are blocked
+  deterministically unless the team first frees room (trim/close/rotate) or makes an explicit margin
+  request. Blocked new buys are demoted to advisory `simulation_only`, not executed.
+- **Dynamic proposal cap.** The review sets `max_new_proposals_this_cycle` (0–3). `team_alpha`
+  (higher-variance, exploration) may receive a slightly higher cap than `team_beta` (conservative,
+  conservation) when conditions justify it. Caps are clamped by the platform hard cap
+  `MAX_DAILY_ORDERS_PER_TEAM` (`MAX_NEW_PROPOSALS_ALPHA` default 3, `MAX_NEW_PROPOSALS_BETA` default 2).
+- **The LLM may only suggest a tactical intent.** A model's `portfolio_decision` can narrow behavior
+  (choose a decision type, propose trims, request margin, lower the cap) but can never widen the cap,
+  unblock low-buying-power buys, or bypass any hard risk cap. Approved sizing is still computed by the
+  deterministic risk engine.
+
+### Broker rejections
+
+Failed broker submissions (e.g. insufficient buying power, wash-trade detection) are recorded
+distinctly from successful fills: `submitted=False`, `broker_rejected=True`, with `broker_reject_reason`,
+`broker_reject_code`, and a `failure_category` (`insufficient_buying_power` / `wash_trade` /
+`broker_error` / `unknown`). These flow into attribution and the next cycle's Portfolio Manager context.
+No fake fills are ever recorded.
+
 ### Kill switch
 
 A global kill switch (`data/runtime/kill_switch.json`) is checked immediately before every

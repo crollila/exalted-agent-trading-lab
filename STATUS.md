@@ -26,6 +26,43 @@ New commands: `paper-permissions`, `start-week-competition`, `run-week-cycle --t
 `export-team-scorecards`, `kill-switch-on|off|status`. Discord: `!start_week_competition`,
 `!run_week_cycle`, `!week_competition_status`, `!stop_week_competition`, `!kill_switch`.
 
+Proposal attribution outcome refresh (`refresh-proposal-attribution [--team] [--threshold]`):
+re-reads pending proposal/trade outcomes against the latest paper prices + the SPY benchmark
+(via the safe market-data wrapper, team credentials only — global keys are not required) and
+persists `current_price`, `unrealized_pnl`, `return_pct`, `spy_start_price`,
+`spy_current_price`, `spy_return_pct`, `excess_return_pct`, `outcome_status`
+(`pending`/`worked`/`failed`/`mixed`), and `refreshed_at`. The verdict is SPY-relative around a
+small configurable threshold (default 0.5%); missing entry/price, an unavailable SPY benchmark,
+or options leave the row `pending` with a printed skip reason. The JSONL schema is
+backward-compatible (old rows load; new fields default) and is rewritten atomically. A compact
+"recent outcome feedback" block feeds the next LLM cycle as **research feedback only** — it
+never authorizes bypassing risk, sizing, credentials, or the kill switch. `proposal-attribution`
+and `week-competition-status` surface the refreshed outcomes. Refresh reads prices only; it
+submits no orders and prints no secrets.
+
+Phase 7M — Portfolio Manager / Capital Allocator. Before proposing trades, each team runs a
+deterministic Portfolio Manager review of the current book, buying power, prior theses, attribution
+outcomes, and SPY-relative performance, then decides to hold, trim, close, rotate, add, hedge,
+reduce exposure, request margin, or do nothing. Behavior:
+
+- No-trade / hold is a first-class successful outcome (still records scorecard, memory, attribution;
+  the CLI prints "No trade decision" with rationale).
+- Low buying power triggers a review instead of hard-stopping the cycle; new-money buys are blocked
+  (demoted to advisory `simulation_only`) unless the team frees room (trim/close/rotate) or makes an
+  explicit margin request.
+- Dynamic proposal cap (`max_new_proposals_this_cycle`, 0–3): `team_alpha` is higher-variance
+  (exploration, slightly higher cap, more willing to rotate); `team_beta` is conservative
+  (conservation, lower cap, more hold/trim). Both stay within the platform hard cap. Config:
+  `PORTFOLIO_MANAGER_ENABLED` (true), `MAX_NEW_PROPOSALS_ALPHA` (3), `MAX_NEW_PROPOSALS_BETA` (2),
+  `LOW_BUYING_POWER_REVIEW_THRESHOLD_PCT` (0.15), `ALLOW_NO_TRADE_DECISIONS` (true),
+  `CHEAP_CYCLE_GATE_ENABLED` (false).
+- An LLM `portfolio_decision` is advisory only: it may narrow behavior but can never widen the cap,
+  unblock low-BP buys, or bypass hard risk caps. Prompts now require a compact self-review.
+- Broker submission failures are recorded distinctly (`broker_rejected`, `broker_reject_reason`,
+  `broker_reject_code`, `failure_category`: insufficient_buying_power / wash_trade / broker_error /
+  unknown) and flow into attribution + the next cycle's Portfolio Manager context. Each team keeps a
+  compact strategy-memory note (mode = exploration/conservation, what to avoid next cycle).
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 

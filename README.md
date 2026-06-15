@@ -475,11 +475,48 @@ tool — no scraping) and learn from results. Enable it with `NEWS_PROVIDER` (`a
 Research runs log to `data/research/`; per-proposal effectiveness (return, excess vs SPY,
 thesis outcome, cited sources) logs to `data/attribution/` and feeds back into the next
 cycle's prompt. See `docs/research_setup.md`. The LLM only emits proposal JSON; it never calls Alpaca and never sizes orders.
+
+Attribution outcomes start `pending`; refresh them against the latest paper prices + the SPY
+benchmark with:
+
+```bash
+python -m src.main refresh-proposal-attribution                      # both teams
+python -m src.main refresh-proposal-attribution --team team_alpha    # one team
+python -m src.main refresh-proposal-attribution --threshold 0.01     # custom worked/failed band
+```
+
+Each record gets `current_price`, `unrealized_pnl`, `return_pct`, `spy_return_pct`,
+`excess_return_pct`, `outcome_status` (`pending`/`worked`/`failed`/`mixed`), and a
+`refreshed_at` timestamp. The verdict is SPY-relative: excess above the threshold is `worked`,
+below is `failed`, near the flat band is `mixed`; missing entry/price, an unavailable SPY
+benchmark, or options leave the row `pending` with a printed skip reason. Refresh only reads
+prices (via the safe market-data wrapper using working team credentials — global keys are not
+required) and rewrites the local JSONL atomically; it never submits orders and never prints
+secrets. A compact "recent outcome feedback" block (best worked / worst failed proposals,
+winning/losing research themes, SPY-relative performance) then feeds the next LLM cycle as
+**research feedback only** — it never authorizes bypassing risk, sizing, credentials, or the
+kill switch. `proposal-attribution` and `week-competition-status` surface the refreshed outcomes.
 Invalid model JSON is rejected and logged, never crashing the cycle. If the selected provider's
 key is missing, the cycle fails clearly before any broker execution. Live news/research is an
 opt-in scaffold (`ENABLE_LIVE_NEWS_RESEARCH`, `NEWS_PROVIDER`), off by default. SPY benchmark
 return is computed from the starting SPY price saved at `start-week-competition` (re-run it once
 to capture the starting price). See `docs/model_provider_setup.md`.
+
+**Portfolio Manager / Capital Allocator (Phase 7M).** Before proposing trades, each team reviews its
+current book, buying power, prior theses, attribution outcomes, and SPY-relative performance, then
+decides to hold, trim, close, rotate, add, hedge, reduce exposure, request margin, or do nothing.
+`run-week-cycle` prints the decision; a no-trade/hold is a valid successful outcome ("No trade
+decision" with rationale) that still records scorecard, memory, and attribution. Low buying power
+triggers a review instead of hard-stopping the cycle — new-money buys are blocked (demoted to advisory
+`simulation_only`) unless the team first frees room (trim/close/rotate) or makes an explicit margin
+request. The proposal cap is dynamic (0–3): `team_alpha` is higher-variance (exploration, more willing
+to rotate); `team_beta` is conservative (conservation, fewer trades). Both stay within the platform
+hard cap. An LLM `portfolio_decision` is advisory only — it can never widen the cap, unblock low-BP
+buys, or bypass hard risk caps. Broker submission failures (insufficient buying power, wash trade, …)
+are recorded distinctly (`broker_rejected`, `failure_category`, reason/code) and feed the next review.
+Config: `PORTFOLIO_MANAGER_ENABLED` (true), `MAX_NEW_PROPOSALS_ALPHA` (3), `MAX_NEW_PROPOSALS_BETA` (2),
+`LOW_BUYING_POWER_REVIEW_THRESHOLD_PCT` (0.15), `ALLOW_NO_TRADE_DECISIONS` (true),
+`CHEAP_CYCLE_GATE_ENABLED` (false). See `docs/risk_policy.md`.
 
 Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
 computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.
