@@ -16,6 +16,7 @@ from src.agents.llm_provider import LLMProvider
 from src.agents.llm_proposal_agent import generate_llm_proposals
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.competition.attribution import DEFAULT_ATTRIBUTION_DIR, performance_feedback
+from src.competition.daily_review import DEFAULT_REVIEWS_DIR, daily_review_context
 from src.competition.scorecard import DEFAULT_SCORECARD_DIR, load_latest_scorecard
 from src.competition.week_competition import (
     DEFAULT_COMPETITION_DIR,
@@ -49,6 +50,7 @@ def build_llm_context(
     learning_dir: Path | str = DEFAULT_LEARNING_DIR,
     competition_dir: Path | str = DEFAULT_COMPETITION_DIR,
     attribution_dir: Path | str = DEFAULT_ATTRIBUTION_DIR,
+    reviews_dir: Path | str = DEFAULT_REVIEWS_DIR,
     research_run: ResearchRunResult | None = None,
     watchlist: tuple[str, ...] = (),
 ) -> dict[str, Any]:
@@ -86,6 +88,7 @@ def build_llm_context(
         },
         "competition_status": competition_status(competition_dir, scorecard_dir),
         "performance_feedback": performance_feedback(team_id, attribution_dir=attribution_dir),
+        "daily_review": daily_review_context(team_id, reviews_dir=reviews_dir, learning_dir=learning_dir),
         "research": research_block,
     }
 
@@ -104,6 +107,7 @@ def build_llm_proposal_source(
     learning_dir: Path | str = DEFAULT_LEARNING_DIR,
     competition_dir: Path | str = DEFAULT_COMPETITION_DIR,
     attribution_dir: Path | str = DEFAULT_ATTRIBUTION_DIR,
+    reviews_dir: Path | str = DEFAULT_REVIEWS_DIR,
     research_dir: Path | str = DEFAULT_RESEARCH_DIR,
 ) -> Callable[[str], ProposalBundle]:
     """Return a ``run_week_cycle``-compatible proposal source backed by the LLM."""
@@ -127,6 +131,7 @@ def build_llm_proposal_source(
             learning_dir=learning_dir,
             competition_dir=competition_dir,
             attribution_dir=attribution_dir,
+            reviews_dir=reviews_dir,
             research_run=research_run,
             watchlist=research_config.watchlist,
         )

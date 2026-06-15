@@ -44,19 +44,27 @@ def test_resolve_invalid_source_exits(monkeypatch):
 def test_proposal_source_flag_registered_and_dispatched(monkeypatch):
     captured = {}
     monkeypatch.setattr(
-        main, "run_week_cycle_cli", lambda team, proposal_source: captured.update(team=team, src=proposal_source)
+        main,
+        "run_week_cycle_cli",
+        lambda team, proposal_source, review_only: captured.update(
+            team=team, src=proposal_source, review=review_only
+        ),
     )
     _run_cli(monkeypatch, ["run-week-cycle", "--team", "team_alpha", "--proposal-source", "llm"])
-    assert captured == {"team": "team_alpha", "src": "llm"}
+    assert captured == {"team": "team_alpha", "src": "llm", "review": False}
 
 
 def test_default_source_dispatches_none(monkeypatch):
     captured = {}
     monkeypatch.setattr(
-        main, "run_week_cycle_cli", lambda team, proposal_source: captured.update(team=team, src=proposal_source)
+        main,
+        "run_week_cycle_cli",
+        lambda team, proposal_source, review_only: captured.update(
+            team=team, src=proposal_source, review=review_only
+        ),
     )
     _run_cli(monkeypatch, ["run-week-cycle", "--team", "team_beta"])
-    assert captured == {"team": "team_beta", "src": None}
+    assert captured == {"team": "team_beta", "src": None, "review": False}
 
 
 # --- missing key fails before broker execution ---

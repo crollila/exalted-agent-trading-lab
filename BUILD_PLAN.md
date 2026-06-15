@@ -1180,3 +1180,27 @@ Delivered:
 
 Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no
 order submission from chat/Agent Hub/ask/UI surfaces, no weakening of hard risk caps.
+
+## Phase 7N - Strategy Debate, Daily SPY Attribution, and Cheap Cycle Gate
+
+Goal: make teams behave like investment teams that review outcomes, explain SPY-relative results,
+and only spend LLM/API calls when useful.
+
+Delivered:
+
+- `src/competition/cycle_gate.py` — `CheapCycleGateConfig` (env), `GateDecision`, deterministic
+  `evaluate_cheap_cycle_gate` (interval per team, major-SPY-move/broker-rejection/research triggers,
+  low-buying-power → review recommendation not forced orders). CLI `cheap-cycle-gate --team`.
+- Review-only mode: `run_week_cycle(..., review_only=True)` + `run-week-cycle --review-only`. Runs the
+  review, updates memory/scorecard, submits no new orders, never builds a broker client, and does not
+  reset the full-cycle timer (`TeamLearningLedger.last_full_cycle_at`).
+- `src/competition/daily_review.py` — symbol buckets, `compute_daily_spy_attribution` (returns/excess,
+  long/short contribution, winners/losers, submitted/rejected, no-trade cycles, sector buckets, driver
+  explanation), and `DailyTeamReview` strategy-debate artifact persisted under `data/reviews/`
+  (atomic write). CLI `daily-spy-attribution` and `export-daily-team-review`.
+- `daily_review_context` feeds a compact previous-review block into `build_llm_context` (research
+  feedback only). `src/competition/scorecard.py` gains `load_scorecard_history` for no-trade counting.
+- Deterministic mocked tests (no network/credentials/LLM), docs, and a cheaper suggested loop in README.
+
+Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no new external
+web/search calls (OpenAI web search stays off; Alpaca news only), no weakening of hard risk caps.

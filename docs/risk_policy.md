@@ -82,6 +82,15 @@ hedge, reduce exposure, request margin, or do nothing. Key rules:
   unblock low-buying-power buys, or bypass any hard risk cap. Approved sizing is still computed by the
   deterministic risk engine.
 
+### Review-only cycles + cheap cycle gate (Phase 7N)
+
+`run-week-cycle --review-only` runs the portfolio/strategy review and updates memory/scorecard but
+submits **no** new broker orders — it never builds a broker client and forces an advisory-only gate, so
+nothing reaches execution. The `cheap-cycle-gate` command only reads local data (no LLM, no broker, no
+network) to recommend whether a full cycle is worth running; low buying power recommends a review, not a
+forced trading cycle. Neither path can submit orders or relax any hard risk cap; the deterministic risk
+engine, team credentials, and kill switch remain the only gates to a paper order.
+
 ### Broker rejections
 
 Failed broker submissions (e.g. insufficient buying power, wash-trade detection) are recorded

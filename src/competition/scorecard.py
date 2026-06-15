@@ -8,7 +8,7 @@ benchmark return and excess return vs SPY required by the competition spec.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,6 +68,9 @@ class TeamScorecard:
         return cls(**data)
 
 
+_SCORECARD_FIELDS = {f.name for f in fields(TeamScorecard)}
+
+
 def _latest_path(team_id: str, scorecard_dir: Path | str) -> Path:
     return Path(scorecard_dir) / f"{team_id}_latest.json"
 
@@ -94,6 +97,32 @@ def load_latest_scorecard(
     if not path.exists():
         return None
     return TeamScorecard.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def load_scorecard_history(
+    team_id: str,
+    scorecard_dir: Path | str = DEFAULT_SCORECARD_DIR,
+) -> list[TeamScorecard]:
+    """Load all persisted per-cycle scorecards for a team (excludes the _latest alias).
+
+    Tolerant of old files missing newer fields. Sorted by created_at when present.
+    """
+
+    directory = Path(scorecard_dir)
+    if not directory.exists():
+        return []
+    cards: list[TeamScorecard] = []
+    for path in directory.glob(f"{team_id}_*.json"):
+        if path.name.endswith("_latest.json"):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            known = {k: v for k, v in data.items() if k in _SCORECARD_FIELDS}
+            cards.append(TeamScorecard.from_dict(known))
+        except (ValueError, TypeError, OSError):
+            continue
+    cards.sort(key=lambda c: c.created_at)
+    return cards
 
 
 def rank_scorecards(scorecards: list[TeamScorecard]) -> list[TeamScorecard]:

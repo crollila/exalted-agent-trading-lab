@@ -518,6 +518,44 @@ Config: `PORTFOLIO_MANAGER_ENABLED` (true), `MAX_NEW_PROPOSALS_ALPHA` (3), `MAX_
 `LOW_BUYING_POWER_REVIEW_THRESHOLD_PCT` (0.15), `ALLOW_NO_TRADE_DECISIONS` (true),
 `CHEAP_CYCLE_GATE_ENABLED` (false). See `docs/risk_policy.md`.
 
+**Strategy debate, daily SPY attribution, and a cheap cycle gate (Phase 7N).** To behave like an
+investment team (and control LLM cost), the gate decides — using only cheap local data, no LLM — whether
+a full cycle is worth running:
+
+```bash
+python -m src.main cheap-cycle-gate --team team_alpha        # should_run_full_cycle / reason / wait / flags
+python -m src.main run-week-cycle --team team_alpha --proposal-source llm --review-only  # review, no orders
+python -m src.main daily-spy-attribution                     # why each team beat/lost to SPY
+python -m src.main export-daily-team-review --team team_alpha  # strategy-debate artifact -> data/reviews/
+```
+
+Review-only updates memory/scorecard and emits advisory hold/trim/close recommendations but never
+submits orders or builds a broker client. The daily SPY attribution and review reuse local
+scorecard/attribution data (no new external web/search calls; Alpaca news stays the only live research
+provider). The compact daily review feeds the next LLM cycle as research feedback only. Config:
+`CHEAP_CYCLE_GATE_ENABLED`, `MIN_FULL_CYCLE_INTERVAL_MINUTES_ALPHA` (30), `MIN_FULL_CYCLE_INTERVAL_MINUTES_BETA`
+(45), `FORCE_FULL_CYCLE_ON_MAJOR_MOVE` (true), `MAJOR_SPY_MOVE_THRESHOLD_PCT` (0.5),
+`FORCE_FULL_CYCLE_ON_LOW_BUYING_POWER` (false).
+
+Suggested cheaper operating loop:
+
+```text
+Every ~15 minutes:
+  python -m src.main refresh-proposal-attribution
+  python -m src.main week-competition-status
+  python -m src.main cheap-cycle-gate --team team_alpha
+  python -m src.main cheap-cycle-gate --team team_beta
+  # Only if a gate says should_run_full_cycle=true:
+  python -m src.main run-week-cycle --team <that team> --proposal-source llm
+  # (or --review-only when the gate recommends a review)
+
+End of day:
+  python -m src.main refresh-proposal-attribution
+  python -m src.main daily-spy-attribution
+  python -m src.main export-daily-team-review
+  python -m src.main export-team-scorecards
+```
+
 Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
 computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.
 Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands cannot submit orders.

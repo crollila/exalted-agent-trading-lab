@@ -15,6 +15,7 @@ data/agent_learning/
 data/scorecards/
 data/research/
 data/attribution/
+data/reviews/
 *.pyc
 .DS_Store
 .idea/

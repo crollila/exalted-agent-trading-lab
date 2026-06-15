@@ -49,6 +49,8 @@ class TeamLearningLedger:
     # Phase 7M strategy-memory feedback (compact, no secrets).
     mode: str = ""  # exploration | conservation
     avoid_next_cycle: list[str] = field(default_factory=list)
+    # Phase 7N: timestamp of the last FULL (non-review-only) cycle, for the cheap gate.
+    last_full_cycle_at: str = ""
     reviews: list[CycleReview] = field(default_factory=list)
     updated_at: str = ""
 
@@ -103,6 +105,7 @@ def update_team_learning(
     alpha_vs_beta: str | None = None,
     mode: str | None = None,
     avoid_next_cycle: list[str] | None = None,
+    mark_full_cycle: bool = False,
     learning_dir: Path | str = DEFAULT_LEARNING_DIR,
 ) -> TeamLearningLedger:
     """Load, update, and persist a team's learning ledger after a cycle."""
@@ -128,6 +131,8 @@ def update_team_learning(
             if item and item not in ledger.avoid_next_cycle:
                 ledger.avoid_next_cycle.append(item)
         ledger.avoid_next_cycle = ledger.avoid_next_cycle[-10:]
+    if mark_full_cycle:
+        ledger.last_full_cycle_at = datetime.now(timezone.utc).isoformat()
     ledger.record_cycle(review)
     ledger.save(learning_dir)
     return ledger

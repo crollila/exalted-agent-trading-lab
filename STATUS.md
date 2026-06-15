@@ -63,6 +63,32 @@ reduce exposure, request margin, or do nothing. Behavior:
   unknown) and flow into attribution + the next cycle's Portfolio Manager context. Each team keeps a
   compact strategy-memory note (mode = exploration/conservation, what to avoid next cycle).
 
+Phase 7N — Strategy Debate, Daily SPY Attribution, and Cheap Cycle Gate. Teams behave more like
+investment teams that review outcomes and only spend LLM/API calls when useful:
+
+- `cheap-cycle-gate --team <team>` decides (no LLM, local data only) whether a full
+  `run-week-cycle` is worth running. It returns `should_run_full_cycle`, `reason`,
+  `recommended_wait_minutes`, `recommend_review_only`, and `trigger_flags`, using the last full-cycle
+  time, scorecard, attribution, buying power, and broker rejections. Config: `CHEAP_CYCLE_GATE_ENABLED`
+  (false), `MIN_FULL_CYCLE_INTERVAL_MINUTES_ALPHA` (30), `MIN_FULL_CYCLE_INTERVAL_MINUTES_BETA` (45),
+  `FORCE_FULL_CYCLE_ON_MAJOR_MOVE` (true), `MAJOR_SPY_MOVE_THRESHOLD_PCT` (0.5),
+  `FORCE_FULL_CYCLE_ON_LOW_BUYING_POWER` (false). Alpha has a shorter interval (more exploratory);
+  low buying power recommends a review, never forces new orders.
+- `run-week-cycle --review-only` runs the portfolio/strategy review and updates memory/scorecard but
+  submits NO new broker orders (advisory hold/trim/close only); it never builds a broker client. It
+  does not reset the full-cycle timer.
+- `daily-spy-attribution [--team]` explains why each team beat or lost to SPY (team/SPY/excess return,
+  begin/end equity, long/short contribution estimates, top winners/losers, submitted vs broker-rejected,
+  no-trade cycles, best-effort symbol/sector buckets, and a concise driver explanation: stock selection /
+  sector / short exposure / missed beta / leverage / broker rejections / too much cash / bad timing).
+- `export-daily-team-review [--team]` writes a compact strategy-debate artifact (the standard
+  self-review questions + recommended exploration/conservation mode) under the ignored path
+  `data/reviews/`. A compact version feeds the next LLM cycle's context as research feedback only.
+
+Cost control: the cheap gate can recommend skipping full cycles; review-only updates learning without
+trading; the daily review reuses local data only (no new external web/search calls; Alpaca news remains
+the only live research provider; OpenAI web search stays off).
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 

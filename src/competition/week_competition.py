@@ -23,7 +23,7 @@ gates and the guarded broker bridge.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -342,9 +342,12 @@ class CycleResult:
     kill_switch_engaged: bool
     bundle: "ProposalBundle | None" = None
     portfolio_decision: "PortfolioDecision | None" = None
+    review_only: bool = False
 
     @property
     def no_trade(self) -> bool:
+        if self.review_only:
+            return True
         if self.portfolio_decision is not None:
             return self.portfolio_decision.is_no_trade()
         return sum(1 for r in self.execution_records if r.submitted) == 0
@@ -355,6 +358,7 @@ class CycleResult:
             "routing": self.routing.summary(),
             "orders_submitted": sum(1 for r in self.execution_records if r.submitted),
             "kill_switch_engaged": self.kill_switch_engaged,
+            "review_only": self.review_only,
             "portfolio_decision": (
                 self.portfolio_decision.decision_type if self.portfolio_decision else None
             ),
@@ -458,9 +462,12 @@ def run_week_cycle(
     attribution_dir: Path | str | None = None,
     portfolio_config: PortfolioManagerConfig | None = None,
     positions: list | None = None,
+    review_only: bool = False,
 ) -> CycleResult:
     stage_log: list[str] = []
     ks_engaged = is_engaged(kill_switch_path)
+    if review_only:
+        stage_log.append("Review-only cycle: portfolio/strategy review + memory; no new broker orders.")
 
     # Stage 1-2: observe + research.
     stage_log.append("Stage 1: observed market/account context.")
@@ -511,7 +518,16 @@ def run_week_cycle(
     # Stage 5-6: risk review + deterministic validation via router.
     routing = route_proposals(proposals, permissions, account)
     # Stage 6b: apply the Portfolio Manager dynamic cap (demotes extra opens to advisory).
-    routing = apply_portfolio_gate(routing, portfolio_decision)
+    # Review-only forces an advisory-only gate so nothing reaches execution.
+    gate_decision = portfolio_decision
+    if review_only:
+        gate_decision = replace(
+            portfolio_decision,
+            allowed_to_generate_new_orders=False,
+            max_new_proposals_this_cycle=0,
+            rejected_new_ideas_reason="review-only mode: advisory recommendations only, no new orders",
+        )
+    routing = apply_portfolio_gate(routing, gate_decision)
     stage_log.append(
         "Stage 5-6: routed proposals -> "
         f"execution_eligible={len(routing.execution_eligible)}, "
@@ -521,10 +537,14 @@ def run_week_cycle(
     if portfolio_decision.is_no_trade():
         stage_log.append("Stage 6b: NO-TRADE decision — no new broker orders this cycle (valid outcome).")
 
-    # Stage 7: paper execution (only if not killed).
-    if ks_engaged:
+    # Stage 7: paper execution (only if not killed and not review-only).
+    if ks_engaged or review_only:
         execution_records: list[ExecutionRecord] = []
-        stage_log.append("Stage 7: kill switch engaged; execution skipped.")
+        stage_log.append(
+            "Stage 7: kill switch engaged; execution skipped."
+            if ks_engaged
+            else "Stage 7: review-only mode; broker execution skipped (advisory only)."
+        )
     else:
         execution_records = execute_routed_proposals(
             routing.execution_eligible,
@@ -634,6 +654,7 @@ def run_week_cycle(
         rejected_ideas=bundle.rejected_ideas or None,
         mode=portfolio_decision.mode or None,
         avoid_next_cycle=avoid_next_cycle or None,
+        mark_full_cycle=not review_only,
         **learn_kwargs,
     )
     scorecard.latest_lessons = ledger.latest_lessons()
@@ -665,6 +686,7 @@ def run_week_cycle(
         kill_switch_engaged=ks_engaged,
         bundle=bundle,
         portfolio_decision=portfolio_decision,
+        review_only=review_only,
     )
 
 

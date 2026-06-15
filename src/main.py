@@ -41,6 +41,13 @@ from src.competition.attribution import (
     performance_feedback,
     refresh_team_attribution,
 )
+from src.competition.cycle_gate import CheapCycleGateConfig, evaluate_cheap_cycle_gate
+from src.competition.daily_review import (
+    export_daily_team_review,
+    format_daily_spy_attribution,
+    format_daily_team_review,
+    load_daily_spy_attribution,
+)
 from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
 from src.research.research import build_alpaca_news_fn, build_openai_web_fn
 from src.research.research_config import ResearchConfig
@@ -324,10 +331,12 @@ def run_start_week_competition() -> None:
         print("Starting SPY price: unknown (market data unavailable; SPY benchmark will be unknown).")
 
 
-def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
+def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_only: bool = False) -> None:
     settings = Settings.from_env()
     permissions = TradingPermissions.from_env()
     source_name = _resolve_proposal_source_name(proposal_source)
+    if review_only:
+        print("Review-only cycle: portfolio/strategy review + memory only; NO new broker orders.")
     # Account context uses the TEAM's own credentials only — never global.
     account = _account_context_for_source(team, settings)
     ks = read_kill_switch()
@@ -375,8 +384,9 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
         )
 
     # Execution client (gated): only built for genuine non-dry-run paper submission.
+    # Review-only never submits, so the broker client is never built.
     client = None
-    if not settings.dry_run and not ks.engaged:
+    if not settings.dry_run and not ks.engaged and not review_only:
         try:
             client = client_for_source(
                 team,
@@ -407,8 +417,12 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
         spy_provenance=spy_provenance,
         portfolio_config=PortfolioManagerConfig.from_env(),
         positions=positions,
+        review_only=review_only,
     )
-    print(f"Ran week cycle for {team} (dry_run={settings.dry_run}, proposal_source={source_name}).")
+    print(
+        f"Ran week cycle for {team} (dry_run={settings.dry_run}, proposal_source={source_name}, "
+        f"review_only={review_only})."
+    )
     for line in result.stage_log:
         print(f"  {line}")
     bundle = result.bundle
@@ -583,6 +597,82 @@ def run_refresh_proposal_attribution(team: str | None = None, threshold: float |
                 print(f"  - {skip.symbol} [{skip.proposal_id}]: {skip.reason}")
         else:
             print("Skipped symbols: (none)")
+
+
+def _low_buying_power_from_scorecard(scorecard, pm_threshold: float) -> bool:
+    if scorecard is None or scorecard.buying_power is None:
+        return False
+    equity = scorecard.starting_equity or 0.0
+    if equity <= 0:
+        return False
+    return (scorecard.buying_power / equity) < pm_threshold
+
+
+def run_cheap_cycle_gate(team: str) -> None:
+    """Decide cheaply (no LLM, local data only) whether a full cycle is worth it."""
+
+    gate_config = CheapCycleGateConfig.from_env()
+    pm_config = PortfolioManagerConfig.from_env()
+    ledger = TeamLearningLedger.load(team)
+    scorecard = load_latest_scorecard(team)
+    try:
+        feedback = performance_feedback(team)
+    except Exception:  # noqa: BLE001 - missing/old attribution must not crash the gate
+        feedback = {}
+    outcome = feedback.get("outcome_feedback", {}) if isinstance(feedback, dict) else {}
+
+    broker_rejections = 0
+    if scorecard is not None and scorecard.broker_rejected_count:
+        broker_rejections = scorecard.broker_rejected_count
+    else:
+        broker_rejections = len(outcome.get("recent_broker_rejections", []) or [])
+
+    low_bp = _low_buying_power_from_scorecard(scorecard, pm_config.low_buying_power_review_threshold_pct)
+
+    # SPY recent-move and research-change signals require a per-cycle snapshot we do
+    # not persist; the cheap gate stays local and does not fetch live SPY here.
+    decision = evaluate_cheap_cycle_gate(
+        team,
+        config=gate_config,
+        last_full_cycle_at=ledger.last_full_cycle_at or None,
+        spy_move_pct=None,
+        low_buying_power=low_bp,
+        broker_rejections=broker_rejections,
+        research_changed=False,
+        urgent_review=low_bp,
+        mode=ledger.mode,
+    )
+
+    print(f"=== Cheap cycle gate: {team} (paper-only; no LLM, local data only) ===")
+    print(f"Gate enabled: {gate_config.enabled} | min interval: {gate_config.interval_for(team)}m")
+    print(f"should_run_full_cycle: {decision.should_run_full_cycle}")
+    print(f"reason: {decision.reason}")
+    print(f"recommended_wait_minutes: {decision.recommended_wait_minutes}")
+    print(f"recommend_review_only: {decision.recommend_review_only}")
+    print(f"trigger_flags: {decision.trigger_flags}")
+    if decision.should_run_full_cycle:
+        print(f"Next: python -m src.main run-week-cycle --team {team} --proposal-source llm")
+    elif decision.recommend_review_only:
+        print(f"Next: python -m src.main run-week-cycle --team {team} --proposal-source llm --review-only")
+    else:
+        print("Next: stay cheap (refresh-proposal-attribution / week-competition-status only).")
+
+
+def run_daily_spy_attribution(team: str | None = None) -> None:
+    teams = [team] if team else list(WEEK_TEAMS)
+    for tid in teams:
+        attribution = load_daily_spy_attribution(tid)
+        print(format_daily_spy_attribution(attribution))
+        print("")
+
+
+def run_export_daily_team_review(team: str | None = None) -> None:
+    teams = [team] if team else list(WEEK_TEAMS)
+    for tid in teams:
+        review = export_daily_team_review(tid)
+        print(format_daily_team_review(review))
+        print(f"(Saved under data/reviews/{tid}_latest.json)")
+        print("")
 
 
 def run_week_competition_status() -> None:
@@ -1608,6 +1698,33 @@ def main() -> None:
             "Defaults to env WEEK_COMPETITION_PROPOSAL_SOURCE, then 'default'."
         ),
     )
+    week_cycle_parser.add_argument(
+        "--review-only",
+        action="store_true",
+        help=(
+            "Run portfolio/strategy review + update memory/scorecard, but submit NO new broker "
+            "orders. Produces advisory hold/trim/close recommendations only."
+        ),
+    )
+    gate_parser = subparsers.add_parser(
+        "cheap-cycle-gate",
+        help="Decide (cheaply, no LLM) whether a full run-week-cycle is worth running",
+    )
+    gate_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to evaluate.")
+    spy_attr_parser = subparsers.add_parser(
+        "daily-spy-attribution",
+        help="Explain why each team beat or lost to SPY using local data (paper-only)",
+    )
+    spy_attr_parser.add_argument(
+        "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
+    )
+    daily_review_parser = subparsers.add_parser(
+        "export-daily-team-review",
+        help="Build + persist a compact daily strategy-review artifact under data/reviews/",
+    )
+    daily_review_parser.add_argument(
+        "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
+    )
     subparsers.add_parser("week-competition-status", help="Show Alpha vs Beta competition status and ranking")
     subparsers.add_parser("stop-week-competition", help="Stop the weekly paper competition")
     learning_parser = subparsers.add_parser("team-learning-status", help="Show a team's learning ledger")
@@ -1731,7 +1848,15 @@ def main() -> None:
     elif args.command == "start-week-competition":
         run_start_week_competition()
     elif args.command == "run-week-cycle":
-        run_week_cycle_cli(team=args.team, proposal_source=args.proposal_source)
+        run_week_cycle_cli(
+            team=args.team, proposal_source=args.proposal_source, review_only=args.review_only
+        )
+    elif args.command == "cheap-cycle-gate":
+        run_cheap_cycle_gate(team=args.team)
+    elif args.command == "daily-spy-attribution":
+        run_daily_spy_attribution(team=args.team)
+    elif args.command == "export-daily-team-review":
+        run_export_daily_team_review(team=args.team)
     elif args.command == "week-competition-status":
         run_week_competition_status()
     elif args.command == "stop-week-competition":
