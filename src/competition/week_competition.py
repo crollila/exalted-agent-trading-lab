@@ -63,6 +63,7 @@ class CompetitionState:
     week_end: str | None
     teams: list[str] = field(default_factory=lambda: list(WEEK_TEAMS))
     starting_equity: float = 0.0
+    starting_spy_price: float | None = None
     created_at: str | None = None
     stopped_at: str | None = None
 
@@ -73,6 +74,7 @@ class CompetitionState:
             "week_end": self.week_end,
             "teams": self.teams,
             "starting_equity": self.starting_equity,
+            "starting_spy_price": self.starting_spy_price,
             "created_at": self.created_at,
             "stopped_at": self.stopped_at,
         }
@@ -93,6 +95,9 @@ def load_competition_state(competition_dir: Path | str = DEFAULT_COMPETITION_DIR
         week_end=data.get("week_end"),
         teams=data.get("teams", list(WEEK_TEAMS)),
         starting_equity=float(data.get("starting_equity", 0.0)),
+        starting_spy_price=(
+            float(data["starting_spy_price"]) if data.get("starting_spy_price") is not None else None
+        ),
         created_at=data.get("created_at"),
         stopped_at=data.get("stopped_at"),
     )
@@ -111,6 +116,7 @@ def save_competition_state(
 def start_week_competition(
     *,
     starting_equity: float,
+    starting_spy_price: float | None = None,
     competition_dir: Path | str = DEFAULT_COMPETITION_DIR,
     teams: tuple[str, ...] = WEEK_TEAMS,
     now: datetime | None = None,
@@ -123,6 +129,7 @@ def start_week_competition(
         week_end=week_end.isoformat(),
         teams=list(teams),
         starting_equity=starting_equity,
+        starting_spy_price=starting_spy_price,
         created_at=now.isoformat(),
     )
     save_competition_state(state, competition_dir)
@@ -231,6 +238,33 @@ def default_competition_proposals(
 
 
 @dataclass
+class ProposalBundle:
+    """Proposals plus optional LLM cycle metadata for the learning loop.
+
+    The deterministic ``default_competition_proposals`` returns a plain list; the
+    LLM source returns this richer bundle so ``run_week_cycle`` can fold the
+    model's market summary, learning update, hypothesis, and watchlist into the
+    team's learning ledger. Sizing is still computed by the deterministic engine.
+    """
+
+    proposals: list[CompetitionProposal]
+    market_summary: str | None = None
+    learning_update: dict | None = None
+    research_notes: list[dict] | None = None
+    hypothesis: str | None = None
+    watchlist: list[str] | None = None
+    active_strategy: str | None = None
+    rejected_ideas: list[str] = field(default_factory=list)
+    raw_errors: list[str] = field(default_factory=list)
+
+
+def _as_bundle(result) -> ProposalBundle:
+    if isinstance(result, ProposalBundle):
+        return result
+    return ProposalBundle(proposals=list(result))
+
+
+@dataclass
 class CycleResult:
     team_id: str
     routing: RoutingResult
@@ -238,6 +272,7 @@ class CycleResult:
     scorecard: TeamScorecard
     stage_log: list[str]
     kill_switch_engaged: bool
+    bundle: "ProposalBundle | None" = None
 
     def summary(self) -> dict[str, object]:
         return {
@@ -270,10 +305,15 @@ def run_week_cycle(
     stage_log.append("Stage 1: observed market/account context.")
     stage_log.append("Stage 2: gathered allowlisted research sources.")
 
-    # Stage 3: generate proposals.
+    # Stage 3: generate proposals (default deterministic or LLM bundle).
     source = proposal_source or default_competition_proposals
-    proposals = source(team_id)
+    bundle = _as_bundle(source(team_id))
+    proposals = bundle.proposals
     stage_log.append(f"Stage 3: generated {len(proposals)} proposals.")
+    if bundle.raw_errors:
+        stage_log.append(f"Stage 3: {len(bundle.raw_errors)} proposal(s) rejected during parsing.")
+    if bundle.market_summary:
+        stage_log.append(f"Stage 3: LLM market summary captured.")
 
     # Stage 4: critique (deterministic note; never changes sizing).
     stage_log.append("Stage 4: critiqued proposals (advisory only).")
@@ -333,18 +373,39 @@ def run_week_cycle(
     stage_log.append("Stage 9: built post-cycle scorecard.")
 
     # Stage 10-11: update team memory + adjust next-cycle strategy.
+    what_worked = [f"{r.proposal.symbol} routed execution-eligible" for r in routing.execution_eligible]
+    what_failed = [r.decision.reasons[0] for r in routing.rejected if r.decision.reasons]
+    why_failed = [r.decision.reasons[0] for r in routing.rejected if r.decision.reasons]
+    changes = [
+        f"{r.proposal.symbol} simulation-only: {r.decision.reasons[0]}"
+        for r in routing.simulation_only
+        if r.decision.reasons
+    ]
+    post_trade_reviews = [
+        f"{r.symbol} [{r.proposal_type}]: {r.detail}" for r in execution_records
+    ]
+
+    # Fold in the LLM's own learning update / rationale, when present.
+    llm_update = bundle.learning_update or {}
+    if isinstance(llm_update, dict):
+        if llm_update.get("what_worked"):
+            what_worked.append(f"LLM: {llm_update['what_worked']}")
+        if llm_update.get("what_failed"):
+            what_failed.append(f"LLM: {llm_update['what_failed']}")
+        if llm_update.get("next_adjustment"):
+            changes.append(f"LLM next adjustment: {llm_update['next_adjustment']}")
+    if bundle.market_summary:
+        post_trade_reviews.append(f"LLM market summary: {bundle.market_summary}")
+
     review = CycleReview(
         cycle_id=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"),
         timestamp=datetime.now(timezone.utc).isoformat(),
-        what_worked=[f"{r.proposal.symbol} routed execution-eligible" for r in routing.execution_eligible],
-        what_failed=[r.decision.reasons[0] for r in routing.rejected if r.decision.reasons],
-        why_it_failed=[r.decision.reasons[0] for r in routing.rejected if r.decision.reasons],
-        changes_for_next_cycle=[
-            f"{r.proposal.symbol} simulation-only: {r.decision.reasons[0]}"
-            for r in routing.simulation_only
-            if r.decision.reasons
-        ],
+        what_worked=what_worked,
+        what_failed=what_failed,
+        why_it_failed=why_failed,
+        changes_for_next_cycle=changes,
         risk_events=[r.detail for r in execution_records if not r.submitted and not r.dry_run],
+        post_trade_reviews=post_trade_reviews,
         spy_comparison=({"spy_return_pct": spy_return_pct} if spy_return_pct is not None else None),
         proposals=len(proposals),
         approved=len(routing.execution_eligible),
@@ -356,7 +417,10 @@ def run_week_cycle(
     ledger = update_team_learning(
         team_id,
         review,
-        active_strategy="week_competition_default",
+        active_strategy=bundle.active_strategy or "week_competition_default",
+        hypothesis=bundle.hypothesis,
+        watchlist=bundle.watchlist,
+        rejected_ideas=bundle.rejected_ideas or None,
         **learn_kwargs,
     )
     scorecard.latest_lessons = ledger.latest_lessons()
@@ -372,6 +436,7 @@ def run_week_cycle(
         scorecard=scorecard,
         stage_log=stage_log,
         kill_switch_engaged=ks_engaged,
+        bundle=bundle,
     )
 
 

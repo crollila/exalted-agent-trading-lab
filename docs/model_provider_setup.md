@@ -18,8 +18,14 @@ EXALTED_LLM_PROVIDER=openai   # openai | anthropic | ollama
 ```env
 EXALTED_LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...          # local .env only; never commit
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=gpt-5.4-mini
 ```
+
+To drive the weekly competition with the provider, also set
+`WEEK_COMPETITION_PROPOSAL_SOURCE=llm` (or pass `--proposal-source llm`). Team prompts are
+distinct (Alpha = aggressive momentum; Beta = contrarian/mean-reversion) and contain only
+allowlisted, provenance-tagged context — never secrets. The LLM emits proposal JSON only and
+never sizes orders or touches the broker.
 
 ### Anthropic / Claude
 

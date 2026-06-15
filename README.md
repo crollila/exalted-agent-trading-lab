@@ -448,6 +448,32 @@ python -m src.main kill-switch-on        # emergency stop; checked before every 
 python -m src.main kill-switch-off
 ```
 
+### LLM-driven proposals (OpenAI / Anthropic / Ollama)
+
+Each team can generate its own proposals from live, allowlisted account/market/research
+context using the provider abstraction. Choose the source per run or via env:
+
+```bash
+python -m src.main run-week-cycle --team team_alpha --proposal-source default   # deterministic
+python -m src.main run-week-cycle --team team_alpha --proposal-source llm        # provider
+```
+
+```env
+EXALTED_LLM_PROVIDER=openai
+OPENAI_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=<local only>
+WEEK_COMPETITION_PROPOSAL_SOURCE=llm   # default when --proposal-source is omitted
+```
+
+Team Alpha runs an aggressive growth/momentum mandate; Team Beta runs a contrarian,
+risk-adjusted/mean-reversion mandate — their system prompts differ so they don't mirror each
+other. The LLM only emits proposal JSON; it never calls Alpaca and never sizes orders.
+Invalid model JSON is rejected and logged, never crashing the cycle. If the selected provider's
+key is missing, the cycle fails clearly before any broker execution. Live news/research is an
+opt-in scaffold (`ENABLE_LIVE_NEWS_RESEARCH`, `NEWS_PROVIDER`), off by default. SPY benchmark
+return is computed from the starting SPY price saved at `start-week-competition` (re-run it once
+to capture the starting price). See `docs/model_provider_setup.md`.
+
 Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
 computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.
 Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands cannot submit orders.

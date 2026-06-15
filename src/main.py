@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -27,8 +28,14 @@ from src.brokers.paper_auth import (
     client_for_source,
     diagnose_all,
     diagnose_source,
+    settings_for_source,
 )
+from src.agents.llm_provider import LLMProviderError, build_provider
+from src.competition.llm_cycle import build_llm_proposal_source
+from src.competition.proposals import DataProvenance
 from src.competition.risk_engine import AccountContext
+from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
+from src.research.news import NewsConfig, news_provider_status
 from src.competition.scorecard import (
     export_scorecards_markdown,
     load_latest_scorecard,
@@ -36,6 +43,7 @@ from src.competition.scorecard import (
 from src.competition.week_competition import (
     WEEK_TEAMS,
     competition_status,
+    load_competition_state,
     run_week_cycle,
     start_week_competition,
     stop_week_competition,
@@ -217,26 +225,107 @@ def _account_context_for_source(source: str, settings: Settings) -> "AccountCont
     )
 
 
+VALID_PROPOSAL_SOURCES = ("default", "llm")
+
+
+def _resolve_proposal_source_name(cli_value: str | None) -> str:
+    name = (cli_value or os.getenv("WEEK_COMPETITION_PROPOSAL_SOURCE") or "default").strip().lower()
+    if name not in VALID_PROPOSAL_SOURCES:
+        print(f"Unknown --proposal-source '{name}'. Use one of: {', '.join(VALID_PROPOSAL_SOURCES)}.")
+        raise SystemExit(1)
+    return name
+
+
+def _market_data_price_fn(settings: Settings):
+    """Build a latest-price function from the first working credential source.
+
+    Market data is account-agnostic, so a working team key is fine even if the
+    global key is invalid. Returns None if no source can fetch prices.
+    """
+
+    for source in ("team_alpha", "team_beta", "global"):
+        try:
+            price_settings = settings_for_source(source, settings)
+            price_fn = build_alpaca_price_fn(price_settings)
+            price_fn("SPY")  # validate once
+            return price_fn
+        except Exception:  # noqa: BLE001 - try the next source; degrade to None
+            continue
+    return None
+
+
+def _safe_read_client(team: str, settings: Settings):
+    try:
+        return client_for_source(team, base_settings=settings)
+    except Exception:  # noqa: BLE001 - read-only context client is best-effort
+        return None
+
+
 def run_start_week_competition() -> None:
     settings = Settings.from_env()
-    state = start_week_competition(starting_equity=settings.starting_equity)
+    price_fn = _market_data_price_fn(settings)
+    starting_spy_price, _ = latest_price("SPY", price_fn)
+    state = start_week_competition(
+        starting_equity=settings.starting_equity,
+        starting_spy_price=starting_spy_price,
+    )
     print("Started Alpha vs Beta weekly paper competition (paper-only).")
     print(f"Week start: {state.week_start}")
     print(f"Week end: {state.week_end}")
     print(f"Teams: {', '.join(state.teams)}")
+    if starting_spy_price is not None:
+        print(f"Starting SPY price: {starting_spy_price}")
+    else:
+        print("Starting SPY price: unknown (market data unavailable; SPY benchmark will be unknown).")
 
 
-def run_week_cycle_cli(team: str) -> None:
+def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
     settings = Settings.from_env()
     permissions = TradingPermissions.from_env()
+    source_name = _resolve_proposal_source_name(proposal_source)
     # Account context uses the TEAM's own credentials only — never global.
     account = _account_context_for_source(team, settings)
     ks = read_kill_switch()
     if ks.engaged:
         print(ks.describe())
 
-    # Only build a real broker client for genuine (non-dry-run) paper submission,
-    # bound strictly to the team's own credential source (no global fallback).
+    # Read-only context client + market data (used for research context + SPY).
+    context_client = _safe_read_client(team, settings)
+    price_fn = _market_data_price_fn(settings)
+
+    # SPY benchmark (Task 6): compute return vs the recorded starting SPY price.
+    state = load_competition_state()
+    spy_return_pct = None
+    spy_provenance = DataProvenance.UNKNOWN
+    if state.starting_spy_price and price_fn is not None:
+        current_spy, _ = latest_price("SPY", price_fn)
+        spy_return_pct = spy_return(state.starting_spy_price, current_spy)
+        if spy_return_pct is None:
+            print("(SPY current price unavailable; SPY return unknown.)")
+        else:
+            spy_provenance = DataProvenance.LIVE
+    elif not state.starting_spy_price:
+        print("(No starting SPY price recorded; SPY return unknown. Re-run start-week-competition with market data.)")
+
+    # Resolve proposal source. For LLM, fail clearly BEFORE any broker execution.
+    week_proposal_source = None
+    if source_name == "llm":
+        try:
+            provider = build_provider()
+        except LLMProviderError as exc:
+            print(f"LLM proposal source unavailable: {exc}")
+            raise SystemExit(1) from exc
+        strategy_id = f"{team}_llm_week_competition_v1"
+        week_proposal_source = build_llm_proposal_source(
+            team,
+            provider=provider,
+            strategy_id=strategy_id,
+            client=context_client,
+            price_fn=price_fn,
+            news_config=NewsConfig.from_env(),
+        )
+
+    # Execution client (gated): only built for genuine non-dry-run paper submission.
     client = None
     if not settings.dry_run and not ks.engaged:
         try:
@@ -249,13 +338,25 @@ def run_week_cycle_cli(team: str) -> None:
         team,
         permissions=permissions,
         account=account,
+        proposal_source=week_proposal_source,
         client=client,
         dry_run=settings.dry_run,
+        spy_return_pct=spy_return_pct,
+        spy_provenance=spy_provenance,
     )
-    print(f"Ran week cycle for {team} (dry_run={settings.dry_run}).")
+    print(f"Ran week cycle for {team} (dry_run={settings.dry_run}, proposal_source={source_name}).")
     for line in result.stage_log:
         print(f"  {line}")
+    bundle = result.bundle
+    if bundle is not None and bundle.market_summary:
+        print(f"LLM market summary: {bundle.market_summary}")
+    if bundle is not None and bundle.raw_errors:
+        print(f"LLM proposals rejected during parsing: {len(bundle.raw_errors)}")
+        for err in bundle.raw_errors:
+            print(f"  - rejected: {err}")
     print(f"Routing: {result.routing.summary()}")
+    if spy_return_pct is not None:
+        print(f"SPY return this cycle: {spy_return_pct:.4f}")
     print(f"Orders submitted: {sum(1 for r in result.execution_records if r.submitted)}")
     for record in result.execution_records:
         print(f"  - {record.symbol} [{record.proposal_type}]: {record.detail}")
@@ -411,6 +512,10 @@ def run_competition_readiness_check() -> None:
     print(f"Options execution adapter: {'configured' if options_adapter_configured else 'not configured (options execution will refuse)'}")
     print(f"LLM provider selected: {provider_config.provider}")
     print(f"LLM provider key configured: {provider_key_set}")
+    proposal_source = (os.getenv("WEEK_COMPETITION_PROPOSAL_SOURCE") or "default").strip().lower()
+    print(f"Week competition proposal source (default): {proposal_source}")
+    news_status = news_provider_status()
+    print(f"News research: {news_status['message']} (provider={news_status['provider']}, available={news_status['available']})")
     print("")
 
     for source in CREDENTIAL_SOURCES:
@@ -1212,6 +1317,15 @@ def main() -> None:
     subparsers.add_parser("start-week-competition", help="Start the Alpha vs Beta weekly paper competition")
     week_cycle_parser = subparsers.add_parser("run-week-cycle", help="Run one gated paper cycle for a team")
     week_cycle_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to run a cycle for.")
+    week_cycle_parser.add_argument(
+        "--proposal-source",
+        choices=VALID_PROPOSAL_SOURCES,
+        default=None,
+        help=(
+            "Proposal generator: 'default' (deterministic) or 'llm' (provider). "
+            "Defaults to env WEEK_COMPETITION_PROPOSAL_SOURCE, then 'default'."
+        ),
+    )
     subparsers.add_parser("week-competition-status", help="Show Alpha vs Beta competition status and ranking")
     subparsers.add_parser("stop-week-competition", help="Stop the weekly paper competition")
     learning_parser = subparsers.add_parser("team-learning-status", help="Show a team's learning ledger")
@@ -1329,7 +1443,7 @@ def main() -> None:
     elif args.command == "start-week-competition":
         run_start_week_competition()
     elif args.command == "run-week-cycle":
-        run_week_cycle_cli(team=args.team)
+        run_week_cycle_cli(team=args.team, proposal_source=args.proposal_source)
     elif args.command == "week-competition-status":
         run_week_competition_status()
     elif args.command == "stop-week-competition":
