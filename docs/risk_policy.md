@@ -34,6 +34,21 @@ controlled by explicit config (`.env` or UI) — never inferred from broker buyi
   `MAX_OPTIONS_CONTRACTS_PER_TRADE`; requires a calculable max loss and an
   assignment/exercise risk note; logs Greeks if available or marks them unavailable.
 
+### Paper options execution
+
+Approved options reach Alpaca paper through `OptionsExecutionAdapter`, a second
+deterministic gate after the risk engine:
+
+- Single-leg long calls/puts execute (OCC symbol built from the approved leg) using the
+  deterministic risk-approved contract quantity. The LLM never sizes or submits.
+- Multileg spreads are disabled by default (`ENABLE_PAPER_OPTION_SPREADS=false`) and are
+  refused with a logged reason until multileg paper support is verified.
+- 0DTE, naked/uncovered short legs, single short legs, unapproved quantity, and missing
+  contract data are refused outright — never submitted.
+- No fake fills. Broker/permission rejections are logged and the cycle continues.
+- Paper-only and team-credential enforcement are unchanged: team orders use only that
+  team's `TEAM_<NAME>_ALPACA_*` credentials with no global fallback, on the paper endpoint.
+
 ### Deterministic routing
 
 The router produces three buckets:

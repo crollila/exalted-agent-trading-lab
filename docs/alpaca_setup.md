@@ -88,11 +88,27 @@ immediately before submission:
 - `submit_paper_order` — long stock (Level 1). Rejects short/margin/option fields.
 - `submit_paper_short_order` — short stock (Level 2). Requires `short=True` and SELL.
 - `submit_paper_margin_order` — margin stock (Level 3). Requires `margin=True`.
-- `submit_paper_option_order` — defined-risk options (Level 4) via an adapter boundary.
+- `submit_paper_option_order` — defined-risk options (Level 4) via the options adapter.
 
-If no options execution adapter is configured, `submit_paper_option_order` raises a clear
-runtime error (`OptionsAdapterNotConfigured`) instead of faking a fill. Every attempted
-broker submission is logged; every skipped unsupported adapter path is logged.
+### Paper options execution
+
+`OptionsExecutionAdapter` submits approved options to Alpaca paper as real orders:
+
+- **Single-leg long calls/puts execute by default.** The adapter builds the OCC option
+  symbol (e.g. `SPY240920C00510000`) and submits a paper market order using the
+  deterministic risk-approved contract quantity.
+- **Multileg spreads are OFF by default** (`ENABLE_PAPER_OPTION_SPREADS=false`). Runtime
+  MLEG paper support/account approval is uncertain, so `option_debit_spread` /
+  `option_defined_risk_spread` are refused with a clear logged reason. Set
+  `ENABLE_PAPER_OPTION_SPREADS=true` only after verifying multileg paper support.
+- **Always refused (never submitted):** 0DTE, naked/uncovered short options, unapproved
+  contract quantity, and missing/invalid option contract data.
+- It never fakes a fill. If Alpaca rejects the order (e.g. options trading not enabled on
+  the account), the failure is logged and the cycle continues without crashing.
+
+Manual Alpaca setup: enable options trading on each team's paper account (Alpaca dashboard →
+the paper account's options trading level) so single-leg long options are accepted. Until then
+the order is risk-approved but Alpaca will reject submission, which is logged, not fatal.
 
 These methods are reached only from the gated Run Cycle path — never from chat, the Agent
 Hub, ask commands, or the UI. Advanced levels are paper-only and off by default; enable them

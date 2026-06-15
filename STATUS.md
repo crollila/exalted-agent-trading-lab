@@ -5,7 +5,11 @@
 Phase 8 — Alpha vs Beta weekly paper competition with explicit, paper-only advanced
 permission levels (shorting, margin, options), a deterministic advanced risk engine,
 proposal routing, a kill switch, a team learning loop, allowlisted research tools, and
-an LLM provider abstraction (OpenAI/Anthropic/Ollama).
+an LLM provider abstraction (OpenAI/Anthropic/Ollama). LLM-driven proposals
+(`run-week-cycle --proposal-source llm`) and paper options execution are wired:
+single-leg long calls/puts submit to Alpaca paper via the OCC-symbol options adapter
+(multileg spreads off by default), with team-credential-only, no-fake-fill, kill-switch
+guarantees intact.
 
 Key safety properties (unchanged in spirit, now broader):
 

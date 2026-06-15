@@ -1631,6 +1631,8 @@ def render() -> None:
         "Weekly Competition",
         "Alpha vs Beta Scoreboard",
         "Team Learning",
+        "Research",
+        "Proposal Attribution",
         "Permissions / Risk Levels",
         "Advanced Paper Trading",
         "Kill Switch",
@@ -1667,6 +1669,10 @@ def render() -> None:
         competition_view.render_scoreboard(st)
     elif page == "Team Learning":
         competition_view.render_team_learning(st)
+    elif page == "Research":
+        competition_view.render_research(st)
+    elif page == "Proposal Attribution":
+        competition_view.render_attribution(st)
     elif page == "Permissions / Risk Levels":
         competition_view.render_permissions(st)
     elif page == "Advanced Paper Trading":

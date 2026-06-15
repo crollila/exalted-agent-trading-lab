@@ -13,6 +13,8 @@ data/backups/
 data/competition/
 data/agent_learning/
 data/scorecards/
+data/research/
+data/attribution/
 *.pyc
 .DS_Store
 .idea/

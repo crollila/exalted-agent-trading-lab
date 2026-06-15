@@ -68,6 +68,27 @@ def model_provider_data() -> dict[str, Any]:
     }
 
 
+def research_status_data() -> dict[str, Any]:
+    from src.research.research_config import ResearchConfig
+    from src.research.research_log import read_latest_research, research_log_count
+
+    status = ResearchConfig.from_env().status()
+    status["log_entries"] = research_log_count()
+    status["teams"] = {team: read_latest_research(team) for team in WEEK_TEAMS}
+    return status
+
+
+def proposal_attribution_data(team_id: str) -> dict[str, Any]:
+    from src.competition.attribution import load_team_attribution, performance_feedback
+
+    entries = load_team_attribution(team_id)
+    return {
+        "count": len(entries),
+        "feedback": performance_feedback(team_id),
+        "recent": [e.as_dict() for e in entries[-15:]],
+    }
+
+
 def auth_statuses_data(attempt_auth: bool = True) -> dict[str, dict[str, Any]]:
     """Per-source Alpaca paper auth status (secrets never included)."""
 
@@ -207,6 +228,55 @@ def render_team_learning(st) -> None:
     st.write(data.get("strategy_changes") or ["(none yet)"])
     st.subheader("Risk notes")
     st.write(data.get("risk_notes") or ["(none yet)"])
+
+
+def render_research(st) -> None:
+    st.header("Research")
+    data = research_status_data()
+    st.write(f"Provider: **{data['provider']}** | available: {data['available']}")
+    st.write(f"Alpaca news: {data['uses_alpaca']} | OpenAI web: {data['uses_openai_web']} ({data['openai_web_model']})")
+    st.write(f"Log entries: {data['log_entries']}")
+    for team, latest in data["teams"].items():
+        st.subheader(team)
+        if not latest:
+            st.caption("No research logged yet.")
+            continue
+        results = latest.get("results", [])
+        st.caption(f"{len(results)} result(s) via {latest.get('provider')}")
+        for item in results[:5]:
+            st.write(f"[{item.get('source_id')}] {item.get('title')} — {item.get('summary', '')[:140]}")
+
+
+def render_attribution(st) -> None:
+    st.header("Proposal Attribution")
+    team = st.selectbox("Team", list(WEEK_TEAMS), key="attribution_team")
+    data = proposal_attribution_data(team)
+    if data["count"] == 0:
+        st.info("No attribution records yet. Run a cycle first.")
+        return
+    fb = data["feedback"]
+    st.write(f"Tracked: {data['count']} | pending: {fb['pending_count']}")
+    st.write(f"Best/worst symbol: {fb['best_symbol']} / {fb['worst_symbol']}")
+    st.write(f"Best/worst strategy: {fb['best_strategy']} / {fb['worst_strategy']}")
+    st.subheader("Recent winners")
+    st.write(fb["recent_winners"] or ["(none)"])
+    st.subheader("Recent losers")
+    st.write(fb["recent_losers"] or ["(none)"])
+    st.subheader("Recent proposals")
+    st.table(
+        [
+            {
+                "symbol": e["symbol"],
+                "asset_type": e["asset_type"],
+                "routing": e["routing"],
+                "submitted": e["broker_submitted"],
+                "outcome": e["thesis_outcome"],
+                "return_pct": e["return_pct"],
+                "sources": ",".join(e["research_source_ids"]),
+            }
+            for e in data["recent"]
+        ]
+    )
 
 
 def render_model_provider(st) -> None:

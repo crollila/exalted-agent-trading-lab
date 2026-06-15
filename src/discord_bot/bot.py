@@ -1426,6 +1426,53 @@ def build_kill_switch_summary(action: str = "status") -> str:
     return read_kill_switch().describe()
 
 
+def build_research_status_summary() -> str:
+    from src.research.research_config import ResearchConfig
+    from src.research.research_log import read_latest_research, research_log_count
+
+    status = ResearchConfig.from_env().status()
+    lines = [
+        "Research status (allowlisted; paper-only)",
+        f"Provider: {status['provider']} | available: {status['available']}",
+        f"Alpaca news: {status['uses_alpaca']} | OpenAI web: {status['uses_openai_web']}",
+        f"Log entries: {research_log_count()}",
+    ]
+    for team_id in WEEK_TEAMS:
+        latest = read_latest_research(team_id)
+        if not latest:
+            lines.append(f"{team_id}: no research logged yet")
+            continue
+        results = latest.get("results", [])
+        lines.append(f"{team_id}: {len(results)} result(s) via {latest.get('provider')}")
+        for item in results[:2]:
+            lines.append(f"  [{item.get('source_id')}] {item.get('title')}")
+    return _truncate_discord_message("\n".join(lines))
+
+
+def build_proposal_attribution_summary(team_id: str) -> str:
+    if team_id not in WEEK_TEAMS:
+        return f"Unknown team '{team_id}'. Use one of: {', '.join(WEEK_TEAMS)}."
+    from src.competition.attribution import load_team_attribution, performance_feedback
+
+    entries = load_team_attribution(team_id)
+    if not entries:
+        return f"No attribution records for {team_id} yet. Run a cycle first."
+    fb = performance_feedback(team_id)
+    lines = [
+        f"Proposal attribution: {team_id}",
+        f"Tracked: {len(entries)} | pending: {fb['pending_count']}",
+        f"Best symbol: {fb['best_symbol']} | Worst symbol: {fb['worst_symbol']}",
+        f"Best strategy: {fb['best_strategy']} | Worst strategy: {fb['worst_strategy']}",
+    ]
+    for entry in entries[-5:]:
+        ret = "pending" if entry.return_pct is None else f"{entry.return_pct:.4f}"
+        lines.append(
+            f"  {entry.symbol} [{entry.asset_type}] {entry.routing} "
+            f"submitted={entry.broker_submitted} outcome={entry.thesis_outcome} return={ret}"
+        )
+    return _truncate_discord_message("\n".join(lines))
+
+
 def run_discord_bot(config: DiscordBotConfig | None = None) -> None:
     # Validate the token first: a missing token must report clearly before any
     # deeper autonomy-config validation (e.g. advanced autonomy modes) runs.
@@ -1632,6 +1679,14 @@ def run_discord_bot(config: DiscordBotConfig | None = None) -> None:
     @bot.command(name="kill_switch")
     async def prefix_kill_switch(ctx, action: str = "status") -> None:
         await send_prefix_response(ctx, _safe_command(lambda: build_kill_switch_summary(action)))
+
+    @bot.command(name="research_status")
+    async def prefix_research_status(ctx) -> None:
+        await send_prefix_response(ctx, _safe_command(build_research_status_summary))
+
+    @bot.command(name="proposal_attribution")
+    async def prefix_proposal_attribution(ctx, team_id: str) -> None:
+        await send_prefix_response(ctx, _safe_command(lambda: build_proposal_attribution_summary(team_id)))
 
     @bot.command(name="team_autonomy_status")
     async def prefix_team_autonomy_status(ctx, team_id: str) -> None:

@@ -116,27 +116,36 @@ def test_short_path_requires_short_flag():
 # --- options adapter boundary ---
 
 
-def test_option_order_without_adapter_raises_clear_error():
-    client, _ = wrapper()
-    order = OrderRequest(
+def _long_call_option_order(**over):
+    from datetime import date, timedelta
+
+    expiry = (date.today() + timedelta(days=30)).isoformat()
+    values = dict(
         proposal_id="p", symbol="SPY", action=TradeAction.BUY,
         asset_class=AssetClass.OPTION, quantity=1, contracts=1,
-        option_symbol="SPY", dry_run=False, risk_approved=True,
+        option_symbol="SPY",
+        option_contract={
+            "legs": [{"side": "long", "option_type": "call", "strike": 510.0, "expiration": expiry}],
+            "expiration": expiry,
+        },
+        dry_run=False, risk_approved=True,
     )
-    with pytest.raises(OptionsAdapterNotConfigured, match="not configured"):
-        client.submit_paper_option_order(order)
+    values.update(over)
+    return OrderRequest(**values)
+
+
+def test_disabled_adapter_raises_clear_error():
+    adapter = OptionsExecutionAdapter(enabled=False)
+    client, _ = wrapper(options_adapter=adapter)
+    with pytest.raises(OptionsAdapterNotConfigured, match="disabled"):
+        client.submit_paper_option_order(_long_call_option_order())
 
 
 def test_option_order_with_mock_adapter_submits():
     calls = []
     adapter = OptionsExecutionAdapter(submit_fn=lambda o, c: calls.append(o) or SimpleNamespace(id="opt-1"))
     client, _ = wrapper(options_adapter=adapter)
-    order = OrderRequest(
-        proposal_id="p", symbol="SPY", action=TradeAction.BUY,
-        asset_class=AssetClass.OPTION, quantity=1, contracts=1,
-        option_symbol="SPY", dry_run=False, risk_approved=True,
-    )
-    result = client.submit_paper_option_order(order)
+    result = client.submit_paper_option_order(_long_call_option_order())
     assert result.id == "opt-1"
     assert len(calls) == 1
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.brokers.alpaca_client import AlpacaClientWrapper
-from src.brokers.options_adapter import OptionsAdapterNotConfigured
+from src.brokers.options_adapter import OptionsAdapterNotConfigured, OptionsExecutionRefused
 from src.brokers.order_models import AssetClass, OrderRequest, TradeAction
 from src.competition.proposals import CompetitionProposal, ProposalType
 from src.competition.router import RoutedProposal
@@ -183,6 +183,17 @@ def execute_routed_proposals(
                     submitted=False,
                     dry_run=False,
                     detail=f"Options adapter not configured: {exc}",
+                )
+            )
+        except OptionsExecutionRefused as exc:
+            records.append(
+                ExecutionRecord(
+                    proposal_id=proposal.proposal_id,
+                    proposal_type=proposal.proposal_type.value,
+                    symbol=symbol,
+                    submitted=False,
+                    dry_run=False,
+                    detail=f"Options execution refused: {exc}",
                 )
             )
         except KillSwitchEngaged as exc:

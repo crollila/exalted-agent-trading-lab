@@ -34,8 +34,11 @@ from src.agents.llm_provider import LLMProviderError, build_provider
 from src.competition.llm_cycle import build_llm_proposal_source
 from src.competition.proposals import DataProvenance
 from src.competition.risk_engine import AccountContext
+from src.competition.attribution import load_team_attribution, performance_feedback
 from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
-from src.research.news import NewsConfig, news_provider_status
+from src.research.research import build_alpaca_news_fn, build_openai_web_fn
+from src.research.research_config import ResearchConfig
+from src.research.research_log import read_latest_research, research_log_count
 from src.competition.scorecard import (
     export_scorecards_markdown,
     load_latest_scorecard,
@@ -228,6 +231,17 @@ def _account_context_for_source(source: str, settings: Settings) -> "AccountCont
 VALID_PROPOSAL_SOURCES = ("default", "llm")
 
 
+def _options_adapter_from_env() -> OptionsExecutionAdapter:
+    """Build the paper options adapter from env.
+
+    Single-leg long calls/puts execute by default. Multileg spreads stay OFF
+    unless ENABLE_PAPER_OPTION_SPREADS=true (runtime MLEG paper support uncertain).
+    """
+
+    spreads = (os.getenv("ENABLE_PAPER_OPTION_SPREADS", "false") or "false").strip().lower() == "true"
+    return OptionsExecutionAdapter(enabled=True, enable_spreads=spreads)
+
+
 def _resolve_proposal_source_name(cli_value: str | None) -> str:
     name = (cli_value or os.getenv("WEEK_COMPETITION_PROPOSAL_SOURCE") or "default").strip().lower()
     if name not in VALID_PROPOSAL_SOURCES:
@@ -252,6 +266,31 @@ def _market_data_price_fn(settings: Settings):
         except Exception:  # noqa: BLE001 - try the next source; degrade to None
             continue
     return None
+
+
+def _research_fetchers(team: str, settings: Settings, research_config: ResearchConfig):
+    """Build allowlisted research fetchers (Alpaca news / OpenAI web) for a team.
+
+    Alpaca news uses the team's own credentials; OpenAI web uses OPENAI_API_KEY.
+    Returns (alpaca_news_fn, openai_web_fn), each None when unused/unavailable.
+    """
+
+    news_fn = None
+    web_fn = None
+    if research_config.uses_alpaca:
+        try:
+            team_settings = settings_for_source(team, settings)
+            news_fn = build_alpaca_news_fn(team_settings.alpaca_api_key, team_settings.alpaca_secret_key)
+        except Exception as exc:  # noqa: BLE001 - degrade to no news; never crash
+            print(f"(Alpaca news unavailable for {team}: {exc})")
+            news_fn = None
+    if research_config.uses_openai_web:
+        try:
+            web_fn = build_openai_web_fn(os.getenv("OPENAI_API_KEY"))
+        except Exception as exc:  # noqa: BLE001 - degrade to no web research
+            print(f"(OpenAI web research unavailable: {exc})")
+            web_fn = None
+    return news_fn, web_fn
 
 
 def _safe_read_client(team: str, settings: Settings):
@@ -316,20 +355,28 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
             print(f"LLM proposal source unavailable: {exc}")
             raise SystemExit(1) from exc
         strategy_id = f"{team}_llm_week_competition_v1"
+        research_config = ResearchConfig.from_env()
+        alpaca_news_fn, openai_web_fn = _research_fetchers(team, settings, research_config)
         week_proposal_source = build_llm_proposal_source(
             team,
             provider=provider,
             strategy_id=strategy_id,
             client=context_client,
             price_fn=price_fn,
-            news_config=NewsConfig.from_env(),
+            research_config=research_config,
+            alpaca_news_fn=alpaca_news_fn,
+            openai_web_fn=openai_web_fn,
         )
 
     # Execution client (gated): only built for genuine non-dry-run paper submission.
     client = None
     if not settings.dry_run and not ks.engaged:
         try:
-            client = client_for_source(team, base_settings=settings)
+            client = client_for_source(
+                team,
+                base_settings=settings,
+                options_adapter=_options_adapter_from_env(),
+            )
         except Exception as exc:  # noqa: BLE001 - missing/invalid team creds run without live submission
             print(f"(Team broker unavailable: {exc}; running without live submission.)")
             client = None
@@ -360,6 +407,53 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None) -> None:
     print(f"Orders submitted: {sum(1 for r in result.execution_records if r.submitted)}")
     for record in result.execution_records:
         print(f"  - {record.symbol} [{record.proposal_type}]: {record.detail}")
+
+
+def run_research_status() -> None:
+    config = ResearchConfig.from_env()
+    status = config.status()
+    print("=== Research status (allowlisted; no scraping; secrets never printed) ===")
+    print(f"Provider: {status['provider']} | available: {status['available']}")
+    print(f"Alpaca news: {status['uses_alpaca']} | OpenAI web: {status['uses_openai_web']} ({status['openai_web_model']})")
+    print(f"Caps: {status['max_queries_per_team']} queries/team, {status['max_results_per_query']} results/query, "
+          f"lookback {status['lookback_hours']}h")
+    print(f"Watchlist: {', '.join(config.watchlist)}")
+    print(f"Research log entries: {research_log_count()}")
+    for team in WEEK_TEAMS:
+        latest = read_latest_research(team)
+        if not latest:
+            print(f"  {team}: no research logged yet")
+            continue
+        results = latest.get("results", [])
+        print(f"  {team}: {len(results)} result(s) via {latest.get('provider')} (available={latest.get('available')})")
+        for item in results[:3]:
+            print(f"    - [{item.get('source_id')}] {item.get('title')} ({item.get('provider')})")
+        if latest.get("errors"):
+            print(f"    errors: {latest['errors']}")
+
+
+def run_proposal_attribution(team: str) -> None:
+    entries = load_team_attribution(team)
+    print(f"=== Proposal attribution: {team} ===")
+    if not entries:
+        print("No attribution records yet. Run a cycle first.")
+        return
+    feedback = performance_feedback(team)
+    print(f"Total proposals tracked: {len(entries)}")
+    print(f"Best symbol: {feedback['best_symbol']} | Worst symbol: {feedback['worst_symbol']}")
+    print(f"Best strategy: {feedback['best_strategy']} | Worst strategy: {feedback['worst_strategy']}")
+    print(f"Pending outcomes: {feedback['pending_count']}")
+    print("Recent winners:", feedback["recent_winners"] or "(none)")
+    print("Recent losers:", feedback["recent_losers"] or "(none)")
+    print("Recent entries:")
+    for entry in entries[-10:]:
+        ret = "pending" if entry.return_pct is None else f"{entry.return_pct:.4f}"
+        excess = "n/a" if entry.excess_return_vs_spy is None else f"{entry.excess_return_vs_spy:.4f}"
+        print(
+            f"  - {entry.symbol} [{entry.asset_type}] routing={entry.routing} "
+            f"submitted={entry.broker_submitted} outcome={entry.thesis_outcome} "
+            f"return={ret} excessVsSPY={excess} sources={entry.research_source_ids}"
+        )
 
 
 def run_week_competition_status() -> None:
@@ -493,7 +587,7 @@ def run_competition_readiness_check() -> None:
     }.get(provider_config.provider, False)
 
     diagnoses = diagnose_all(base_settings=settings)
-    options_adapter_configured = OptionsExecutionAdapter().configured
+    options_adapter = _options_adapter_from_env()
 
     print("=== Competition readiness check (paper-only) ===")
     print(f"Kill switch: {'ENGAGED' if ks.engaged else 'disengaged'}")
@@ -509,13 +603,19 @@ def run_competition_readiness_check() -> None:
     print(f"  L4 options: {summary['paper_options']}")
     print(f"  allow naked options: {summary['allow_naked_options']}")
     print(f"Advanced caps: {summary['caps']}")
-    print(f"Options execution adapter: {'configured' if options_adapter_configured else 'not configured (options execution will refuse)'}")
+    print(f"Options adapter configured: {'yes' if options_adapter.configured else 'no'}")
+    print(f"Single-leg long options enabled: {'yes' if options_adapter.single_leg_enabled else 'no'}")
+    print(f"Spreads enabled: {'yes' if options_adapter.spreads_enabled else 'no (single-leg only; spreads refuse with a logged reason)'}")
     print(f"LLM provider selected: {provider_config.provider}")
     print(f"LLM provider key configured: {provider_key_set}")
     proposal_source = (os.getenv("WEEK_COMPETITION_PROPOSAL_SOURCE") or "default").strip().lower()
     print(f"Week competition proposal source (default): {proposal_source}")
-    news_status = news_provider_status()
-    print(f"News research: {news_status['message']} (provider={news_status['provider']}, available={news_status['available']})")
+    research_status = ResearchConfig.from_env().status()
+    print(
+        f"Research: {research_status['message']} "
+        f"(provider={research_status['provider']}, available={research_status['available']}, "
+        f"alpaca={research_status['uses_alpaca']}, openai_web={research_status['uses_openai_web']})"
+    )
     print("")
 
     for source in CREDENTIAL_SOURCES:
@@ -1314,6 +1414,15 @@ def main() -> None:
         "competition-readiness-check",
         help="Show per-team competition readiness and exact blockers (paper-only)",
     )
+    subparsers.add_parser(
+        "research-status",
+        help="Show research provider config and latest per-team research",
+    )
+    attribution_parser = subparsers.add_parser(
+        "proposal-attribution",
+        help="Show proposal/trade effectiveness attribution for a team",
+    )
+    attribution_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to show.")
     subparsers.add_parser("start-week-competition", help="Start the Alpha vs Beta weekly paper competition")
     week_cycle_parser = subparsers.add_parser("run-week-cycle", help="Run one gated paper cycle for a team")
     week_cycle_parser.add_argument("--team", required=True, choices=WEEK_TEAMS, help="Team to run a cycle for.")
@@ -1440,6 +1549,10 @@ def main() -> None:
         run_alpaca_auth_diagnose()
     elif args.command == "competition-readiness-check":
         run_competition_readiness_check()
+    elif args.command == "research-status":
+        run_research_status()
+    elif args.command == "proposal-attribution":
+        run_proposal_attribution(team=args.team)
     elif args.command == "start-week-competition":
         run_start_week_competition()
     elif args.command == "run-week-cycle":

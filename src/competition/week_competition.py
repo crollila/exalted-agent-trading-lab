@@ -38,6 +38,7 @@ from src.competition.proposals import (
     OptionType,
     ProposalType,
 )
+from src.competition.attribution import ProposalAttribution, record_attributions
 from src.competition.risk_engine import AccountContext
 from src.competition.router import RoutingResult, route_proposals
 from src.competition.scorecard import (
@@ -256,6 +257,9 @@ class ProposalBundle:
     active_strategy: str | None = None
     rejected_ideas: list[str] = field(default_factory=list)
     raw_errors: list[str] = field(default_factory=list)
+    # proposal_id -> research source ids the model cited for it (Task 5/7).
+    proposal_source_ids: dict[str, list[str]] = field(default_factory=dict)
+    research_source_ids: list[str] = field(default_factory=list)
 
 
 def _as_bundle(result) -> ProposalBundle:
@@ -283,6 +287,65 @@ class CycleResult:
         }
 
 
+def _record_cycle_attribution(
+    *,
+    team_id: str,
+    cycle_id: str,
+    proposal_source: str,
+    routing: RoutingResult,
+    execution_records,
+    bundle: ProposalBundle,
+    spy_return_pct: float | None,
+    llm_update: dict,
+    attribution_dir: Path | str | None,
+) -> None:
+    exec_by_id = {r.proposal_id: r for r in execution_records}
+    entries: list[ProposalAttribution] = []
+
+    routed_groups = (
+        ("execution_eligible", routing.execution_eligible),
+        ("simulation_only", routing.simulation_only),
+        ("rejected", routing.rejected),
+    )
+    for routing_label, group in routed_groups:
+        for routed in group:
+            proposal = routed.proposal
+            record = exec_by_id.get(proposal.proposal_id)
+            order_id = None
+            submitted = False
+            lesson = None
+            if record is not None:
+                submitted = record.submitted
+                raw_order_id = getattr(record.broker_response, "id", None) if record.broker_response else None
+                order_id = str(raw_order_id) if raw_order_id is not None else None
+                if not record.submitted and not record.dry_run:
+                    lesson = record.detail
+            entries.append(
+                ProposalAttribution(
+                    proposal_id=proposal.proposal_id,
+                    team_id=team_id,
+                    strategy_id=proposal.strategy_id,
+                    asset_type=proposal.proposal_type.value,
+                    symbol=proposal.underlying or proposal.symbol,
+                    thesis=proposal.thesis,
+                    cycle_id=cycle_id,
+                    data_sources_used=list(proposal.data_sources),
+                    research_source_ids=bundle.proposal_source_ids.get(proposal.proposal_id, []),
+                    routing=routing_label,
+                    broker_submitted=submitted,
+                    order_id=order_id,
+                    entry_price=proposal.estimated_price,
+                    position_status=("open" if submitted else "none"),
+                    spy_return=spy_return_pct,
+                    thesis_outcome="pending",
+                    lesson_learned=lesson or (llm_update.get("what_failed") if routing_label == "rejected" else None),
+                    next_adjustment=llm_update.get("next_adjustment"),
+                )
+            )
+    kwargs = {} if attribution_dir is None else {"attribution_dir": attribution_dir}
+    record_attributions(entries, **kwargs)
+
+
 def run_week_cycle(
     team_id: str,
     *,
@@ -297,6 +360,7 @@ def run_week_cycle(
     kill_switch_path: str | None = None,
     spy_return_pct: float | None = None,
     spy_provenance: DataProvenance = DataProvenance.UNKNOWN,
+    attribution_dir: Path | str | None = None,
 ) -> CycleResult:
     stage_log: list[str] = []
     ks_engaged = is_engaged(kill_switch_path)
@@ -397,8 +461,9 @@ def run_week_cycle(
     if bundle.market_summary:
         post_trade_reviews.append(f"LLM market summary: {bundle.market_summary}")
 
+    cycle_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     review = CycleReview(
-        cycle_id=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"),
+        cycle_id=cycle_id,
         timestamp=datetime.now(timezone.utc).isoformat(),
         what_worked=what_worked,
         what_failed=what_failed,
@@ -428,6 +493,20 @@ def run_week_cycle(
     scorecard.risk_events = ledger.risk_notes[-5:]
     save_scorecard(scorecard, scorecard_dir)
     stage_log.append("Stage 10-11: updated team memory and next-cycle strategy notes.")
+
+    # Stage 7b: proposal/trade attribution + effectiveness tracking.
+    _record_cycle_attribution(
+        team_id=team_id,
+        cycle_id=cycle_id,
+        proposal_source=("llm" if bundle.market_summary or bundle.proposal_source_ids else "default"),
+        routing=routing,
+        execution_records=execution_records,
+        bundle=bundle,
+        spy_return_pct=spy_return_pct,
+        llm_update=llm_update if isinstance(llm_update, dict) else {},
+        attribution_dir=attribution_dir,
+    )
+    stage_log.append("Stage 7b: recorded proposal attribution for effectiveness tracking.")
 
     return CycleResult(
         team_id=team_id,

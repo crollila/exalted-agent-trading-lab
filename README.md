@@ -467,7 +467,14 @@ WEEK_COMPETITION_PROPOSAL_SOURCE=llm   # default when --proposal-source is omitt
 
 Team Alpha runs an aggressive growth/momentum mandate; Team Beta runs a contrarian,
 risk-adjusted/mean-reversion mandate — their system prompts differ so they don't mirror each
-other. The LLM only emits proposal JSON; it never calls Alpaca and never sizes orders.
+other.
+
+Agents can also do **allowlisted live research** (Alpaca News and/or the OpenAI web-search
+tool — no scraping) and learn from results. Enable it with `NEWS_PROVIDER` (`alpaca`,
+`openai_web`, or `hybrid`) and inspect it with `research-status` / `proposal-attribution`.
+Research runs log to `data/research/`; per-proposal effectiveness (return, excess vs SPY,
+thesis outcome, cited sources) logs to `data/attribution/` and feeds back into the next
+cycle's prompt. See `docs/research_setup.md`. The LLM only emits proposal JSON; it never calls Alpaca and never sizes orders.
 Invalid model JSON is rejected and logged, never crashing the cycle. If the selected provider's
 key is missing, the cycle fails clearly before any broker execution. Live news/research is an
 opt-in scaffold (`ENABLE_LIVE_NEWS_RESEARCH`, `NEWS_PROVIDER`), off by default. SPY benchmark

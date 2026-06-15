@@ -67,9 +67,12 @@ _SHARED_RULES = (
     "and never compute share/contract sizes — a deterministic risk engine does that.\n"
     "- Every proposal must include: thesis, invalidation_condition, risk_notes, "
     "data_sources_used, data_freshness, and confidence (0..1).\n"
+    "- The context includes a 'research' block with results; each result has a 'source_id'. "
+    "When a proposal relies on research, cite those ids in 'research_source_ids' and set "
+    "'research_changed_proposal' (true/false). Do NOT invent news beyond the provided research sources.\n"
     "- Use only the provided context. If a fact is unavailable, say 'unknown'. Never invent prices or news.\n"
-    "- Review the prior scorecard and team memory provided, and explain in learning_update "
-    "what changed from last cycle.\n"
+    "- Review the prior scorecard, team memory, and performance_feedback (recent winners/losers, "
+    "best/worst symbols and strategies), and explain in learning_update what changed from last cycle.\n"
     "- Allowed asset_type values: stock_long, stock_short, margin_stock_long, margin_stock_short, "
     "option_long_call, option_long_put, option_debit_spread, option_defined_risk_spread.\n"
     "- Keep proposals within a small, sane size (target_weight <= 0.15).\n"
@@ -82,7 +85,8 @@ _SCHEMA_HINT = (
     '"symbol": "SPY", "action": "buy", "thesis": "...", "confidence": 0.6, "estimated_price": 500.0, '
     '"target_weight": 0.05, "intended_holding_period": "...", "max_loss_thesis": "...", '
     '"invalidation_condition": "...", "risk_notes": "...", "data_sources_used": ["alpaca_quote"], '
-    '"data_freshness": "live"}], "learning_update": {"what_worked": "...", "what_failed": "...", '
+    '"data_freshness": "live", "research_source_ids": ["r1"], "research_changed_proposal": true}], '
+    '"learning_update": {"what_worked": "...", "what_failed": "...", '
     '"next_adjustment": "..."}, "hypothesis": "...", "watchlist": ["SPY"]}'
 )
 
@@ -323,12 +327,18 @@ def generate_llm_proposals(
 
     proposals: list[CompetitionProposal] = []
     errors: list[str] = []
+    proposal_source_ids: dict[str, list[str]] = {}
+    all_source_ids: set[str] = set()
     for item in data.get("proposals", []) or []:
         proposal, reason = llm_dict_to_proposal(
             item, team_id=team_id, strategy_id=strategy_id, agent_id=agent_id
         )
         if proposal is not None:
             proposals.append(proposal)
+            cited = [str(s).strip() for s in (item.get("research_source_ids") or []) if str(s).strip()]
+            if cited:
+                proposal_source_ids[proposal.proposal_id] = cited
+                all_source_ids.update(cited)
         elif reason:
             errors.append(reason)
 
@@ -345,4 +355,6 @@ def generate_llm_proposals(
         watchlist=[str(s).strip().upper() for s in watchlist] if watchlist else None,
         active_strategy=(str(data["strategy_id"]) if data.get("strategy_id") else strategy_id),
         raw_errors=errors,
+        proposal_source_ids=proposal_source_ids,
+        research_source_ids=sorted(all_source_ids),
     )
