@@ -91,6 +91,12 @@ network) to recommend whether a full cycle is worth running; low buying power re
 forced trading cycle. Neither path can submit orders or relax any hard risk cap; the deterministic risk
 engine, team credentials, and kill switch remain the only gates to a paper order.
 
+`run-cheap-competition-loop` (Phase 7O) only orchestrates these existing commands on an interval: it
+refreshes attribution, prints status, runs the cheap gate, and invokes `run-week-cycle` **only** when the
+gate says so. It submits nothing on its own, respects the kill switch, and never prints secrets. LLM
+model routing (Phase 7O) only selects which model name handles each task; it changes no risk behavior and
+exposes only `true/false` for API-key configuration, never key contents.
+
 ### Broker rejections
 
 Failed broker submissions (e.g. insufficient buying power, wash-trade detection) are recorded

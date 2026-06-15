@@ -1204,3 +1204,25 @@ Delivered:
 
 Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no new external
 web/search calls (OpenAI web search stays off; Alpaca news only), no weakening of hard risk caps.
+
+## Phase 7O - LLM Model Routing and Cost-Saving Automation
+
+Goal: spend strong models only on high-value strategy/proposal decisions; use cheaper models for the
+rest; and replace the manual PowerShell loop with a single cheaper runner command.
+
+Delivered:
+
+- `src/agents/model_routing.py` — task → model resolution (`LLM_MODEL_<TASK>` → `LLM_MODEL` →
+  `OPENAI_MODEL` → default), `build_routed_provider(task)`, and `routing_status` (model names +
+  key-configured bool, never secrets). `LLM_PROVIDER` alias added to `LLMProviderConfig.from_env`.
+- run-week-cycle's LLM proposal path now uses the routed `strategy` model and prints the provider +
+  strategy model. Deterministic paths remain deterministic (not forced onto an LLM).
+- CLI `llm-routing-status`; CLI `run-cheap-competition-loop` (`--once`, `--sleep-seconds`, `--team`,
+  `--market-hours-only`/`--no-market-hours-only`, `--run-review-only-when-skipped`, `--dry-run-loop`).
+  The loop refreshes + gates cheaply and runs a full cycle only when the gate says so; it never bypasses
+  the kill switch and never submits unless `run-week-cycle` is invoked.
+- `.env.example` adds the routing vars + cheaper defaults and de-duplicates `CHEAP_CYCLE_GATE_ENABLED`
+  (now a single `true`). Mocked tests, docs.
+
+Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no new external
+web/search calls, no weakening of hard risk caps, no real OpenAI calls in tests.

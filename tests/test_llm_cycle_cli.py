@@ -89,7 +89,8 @@ def test_llm_missing_key_fails_before_broker_execution(monkeypatch):
         tripwire["exec_client_built"] = True
         raise AssertionError("broker client must not be built when key is missing")
 
-    monkeypatch.setattr(main, "build_provider", boom_provider)
+    # run-week-cycle now routes the strategy model through build_routed_provider.
+    monkeypatch.setattr(main, "build_routed_provider", boom_provider)
     monkeypatch.setattr(main, "run_week_cycle", boom_cycle)
     monkeypatch.setattr(main, "client_for_source", boom_client)
     monkeypatch.setattr(main, "read_kill_switch", lambda *a, **k: type("K", (), {"engaged": False})())

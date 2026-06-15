@@ -89,6 +89,25 @@ Cost control: the cheap gate can recommend skipping full cycles; review-only upd
 trading; the daily review reuses local data only (no new external web/search calls; Alpaca news remains
 the only live research provider; OpenAI web search stays off).
 
+Phase 7O — LLM Model Routing and Cost-Saving Automation. Stronger models run only the high-value
+strategy/proposal path; cheaper models are configured for review/critique/summary/research-synthesis.
+
+- `src/agents/model_routing.py` resolves a model per task via `LLM_MODEL_<TASK>` → `LLM_MODEL` →
+  `OPENAI_MODEL` → built-in default, for tasks: strategy, portfolio_manager, review, critique, summary,
+  research_synthesis, default. `build_routed_provider(task)` builds a provider whose model is the routed
+  one. The only live LLM call path today — run-week-cycle proposal generation — uses the `strategy`
+  model; deterministic paths (PM decision, critique, daily review, research synthesis, summaries) stay
+  deterministic and are not forced onto an LLM. `LLM_PROVIDER` is accepted as an alias for
+  `EXALTED_LLM_PROVIDER`.
+- `llm-routing-status` prints provider + per-task model names and `API key configured: true/false`
+  (never key contents).
+- `run-cheap-competition-loop` is a one-command all-day runner: each iteration refreshes attribution,
+  prints cheap status, runs the cheap gate per team, and runs a full `run-week-cycle` **only** when the
+  gate says so (optionally a review-only cycle when skipped). Args: `--once`, `--sleep-seconds` (900),
+  `--team team_alpha|team_beta|both`, `--market-hours-only`/`--no-market-hours-only`,
+  `--run-review-only-when-skipped`, `--dry-run-loop`. It never bypasses the kill switch, never submits
+  unless `run-week-cycle` is actually invoked, and never prints secrets.
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 

@@ -44,7 +44,10 @@ class LLMProviderConfig:
             load_dotenv()
             env = os.environ
         return cls(
-            provider=(env.get("EXALTED_LLM_PROVIDER", "openai").strip().lower() or "openai"),
+            provider=(
+                (env.get("EXALTED_LLM_PROVIDER") or env.get("LLM_PROVIDER") or "openai").strip().lower()
+                or "openai"
+            ),
             openai_api_key=(env.get("OPENAI_API_KEY") or None),
             openai_model=(env.get("OPENAI_MODEL") or "gpt-4o-mini"),
             anthropic_api_key=(env.get("ANTHROPIC_API_KEY") or None),

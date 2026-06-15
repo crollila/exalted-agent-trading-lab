@@ -556,6 +556,46 @@ End of day:
   python -m src.main export-team-scorecards
 ```
 
+**LLM model routing + one-command cheaper loop (Phase 7O).** Each LLM task routes to its own model so a
+stronger model runs only the high-value strategy/proposal decisions and cheaper models handle the rest.
+Resolution per task is `LLM_MODEL_<TASK>` → `LLM_MODEL` → `OPENAI_MODEL` → built-in default. Inspect it
+with `llm-routing-status` (prints model names and `API key configured: true/false` — never key
+contents):
+
+```bash
+python -m src.main llm-routing-status
+```
+
+Model-routing env vars (the only live LLM call today is strategy/proposal generation, which uses
+`LLM_MODEL_STRATEGY`; the others are wired for when those paths become LLM-backed):
+
+```env
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.4-mini
+LLM_MODEL_STRATEGY=gpt-5.4-mini
+LLM_MODEL_PORTFOLIO_MANAGER=gpt-5.4-mini
+LLM_MODEL_REVIEW=gpt-5.4-nano
+LLM_MODEL_CRITIQUE=gpt-5.4-nano
+LLM_MODEL_SUMMARY=gpt-5.4-nano
+LLM_MODEL_RESEARCH_SYNTHESIS=gpt-5.4-nano
+```
+
+Instead of the manual PowerShell loop above, run the whole cheaper loop with one command. It refreshes
+attribution, prints cheap status, runs the gate per team, and runs a full `run-week-cycle` only when the
+gate says so (a review-only cycle when skipped, if you opt in):
+
+```bash
+# One iteration, just print intended actions (no full cycles, no orders):
+python -m src.main run-cheap-competition-loop --once --dry-run-loop
+
+# All day: gate every 15 minutes, full LLM cycle only when warranted:
+python -m src.main run-cheap-competition-loop --sleep-seconds 900 --run-review-only-when-skipped
+```
+
+Cost savings come from (1) cheaper models on cheap tasks via routing and (2) the gate skipping full LLM
+cycles when nothing material changed. Keep your real `.env` untracked — only `.env.example` is committed,
+and API keys are never printed or logged.
+
 Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
 computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.
 Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands cannot submit orders.

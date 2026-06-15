@@ -31,6 +31,7 @@ from src.brokers.paper_auth import (
     settings_for_source,
 )
 from src.agents.llm_provider import LLMProviderError, build_provider
+from src.agents.model_routing import build_routed_provider, routing_status
 from src.competition.llm_cycle import build_llm_proposal_source
 from src.competition.portfolio_manager import PortfolioManagerConfig
 from src.competition.proposals import DataProvenance
@@ -365,10 +366,13 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
     week_proposal_source = None
     if source_name == "llm":
         try:
-            provider = build_provider()
+            # Strategy/proposal generation is the high-value path -> strategy model.
+            provider = build_routed_provider("strategy")
         except LLMProviderError as exc:
             print(f"LLM proposal source unavailable: {exc}")
             raise SystemExit(1) from exc
+        status = routing_status()
+        print(f"LLM provider: {status['provider']} | strategy model: {status['strategy_model']}")
         strategy_id = f"{team}_llm_week_competition_v1"
         research_config = ResearchConfig.from_env()
         alpaca_news_fn, openai_web_fn = _research_fetchers(team, settings, research_config)
@@ -608,8 +612,11 @@ def _low_buying_power_from_scorecard(scorecard, pm_threshold: float) -> bool:
     return (scorecard.buying_power / equity) < pm_threshold
 
 
-def run_cheap_cycle_gate(team: str) -> None:
-    """Decide cheaply (no LLM, local data only) whether a full cycle is worth it."""
+def _evaluate_team_cheap_gate(team: str):
+    """Resolve cheap/local signals and return (GateDecision, CheapCycleGateConfig).
+
+    No LLM, no broker, no network — reads local ledger/scorecard/attribution only.
+    """
 
     gate_config = CheapCycleGateConfig.from_env()
     pm_config = PortfolioManagerConfig.from_env()
@@ -621,7 +628,6 @@ def run_cheap_cycle_gate(team: str) -> None:
         feedback = {}
     outcome = feedback.get("outcome_feedback", {}) if isinstance(feedback, dict) else {}
 
-    broker_rejections = 0
     if scorecard is not None and scorecard.broker_rejected_count:
         broker_rejections = scorecard.broker_rejected_count
     else:
@@ -642,6 +648,13 @@ def run_cheap_cycle_gate(team: str) -> None:
         urgent_review=low_bp,
         mode=ledger.mode,
     )
+    return decision, gate_config
+
+
+def run_cheap_cycle_gate(team: str) -> None:
+    """Decide cheaply (no LLM, local data only) whether a full cycle is worth it."""
+
+    decision, gate_config = _evaluate_team_cheap_gate(team)
 
     print(f"=== Cheap cycle gate: {team} (paper-only; no LLM, local data only) ===")
     print(f"Gate enabled: {gate_config.enabled} | min interval: {gate_config.interval_for(team)}m")
@@ -673,6 +686,115 @@ def run_export_daily_team_review(team: str | None = None) -> None:
         print(format_daily_team_review(review))
         print(f"(Saved under data/reviews/{tid}_latest.json)")
         print("")
+
+
+def run_llm_routing_status() -> None:
+    """Print task-specific model routing. Model NAMES only — never key contents."""
+
+    status = routing_status()
+    print("=== LLM model routing (Phase 7O; model names only, no secrets) ===")
+    print(f"Provider: {status['provider']}")
+    print(f"Default model: {status['default_model']}")
+    print(f"Strategy model: {status['strategy_model']}")
+    print(f"Portfolio manager model: {status['portfolio_manager_model']}")
+    print(f"Review model: {status['review_model']}")
+    print(f"Critique model: {status['critique_model']}")
+    print(f"Summary model: {status['summary_model']}")
+    print(f"Research synthesis model: {status['research_synthesis_model']}")
+    print(f"API key configured: {status['api_key_configured']}")
+
+
+def _cheap_loop_market_open() -> bool | None:
+    """Best-effort read-only market-open check. None when undeterminable."""
+
+    settings = Settings.from_env()
+    for source in ("team_alpha", "team_beta"):
+        client = _safe_read_client(source, settings)
+        if client is None:
+            continue
+        try:
+            return bool(client.is_market_open())
+        except Exception:  # noqa: BLE001 - degrade to undeterminable; never crash the loop
+            continue
+    return None
+
+
+def run_cheap_competition_loop(
+    *,
+    once: bool = False,
+    sleep_seconds: int = 900,
+    team: str = "both",
+    market_hours_only: bool = True,
+    run_review_only_when_skipped: bool = False,
+    dry_run_loop: bool = False,
+    sleep_fn=None,
+) -> None:
+    """Cost-saving all-day runner: refresh + status + gate, full cycle only when the gate says so.
+
+    Never bypasses the kill switch and never submits unless ``run-week-cycle`` is
+    actually invoked (which keeps its own deterministic risk + kill-switch gates).
+    With ``--dry-run-loop`` it prints intended actions without running full cycles.
+    """
+
+    import time as _time
+
+    sleep_fn = sleep_fn or _time.sleep
+    teams = list(WEEK_TEAMS) if team == "both" else [team]
+    iteration = 0
+
+    while True:
+        iteration += 1
+        print(f"=== Cheap competition loop iteration {iteration} (paper-only; dry_run_loop={dry_run_loop}) ===")
+        ks = read_kill_switch()
+        if ks.engaged:
+            print(ks.describe())
+
+        market_open = _cheap_loop_market_open() if market_hours_only else None
+        if market_hours_only and market_open is False:
+            print("Market is closed; staying cheap (refresh/status/export only, no full cycles this iteration).")
+
+        # Cheap, read-only steps every iteration.
+        if dry_run_loop:
+            print("[dry-run] would run: refresh-proposal-attribution")
+            print("[dry-run] would run: week-competition-status")
+        else:
+            try:
+                run_refresh_proposal_attribution()
+            except SystemExit as exc:  # refresh exits non-zero when market data is unavailable
+                print(f"(refresh-proposal-attribution unavailable: exit {exc.code}; continuing loop)")
+            except Exception as exc:  # noqa: BLE001 - never let a cheap step kill the loop
+                print(f"(refresh-proposal-attribution error: {exc}; continuing loop)")
+            run_week_competition_status()
+
+        for tid in teams:
+            decision, _gate_config = _evaluate_team_cheap_gate(tid)
+            print(
+                f"[{tid}] gate: should_run_full_cycle={decision.should_run_full_cycle} "
+                f"recommend_review_only={decision.recommend_review_only} reason={decision.reason}"
+            )
+            allow_full = decision.should_run_full_cycle and not (market_hours_only and market_open is False)
+            if allow_full:
+                if dry_run_loop:
+                    print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm")
+                else:
+                    run_week_cycle_cli(team=tid, proposal_source="llm")
+            elif run_review_only_when_skipped:
+                if dry_run_loop:
+                    print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
+                else:
+                    run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+            else:
+                print(f"[{tid}] staying cheap this iteration (no full cycle).")
+
+        if dry_run_loop:
+            print("[dry-run] would run: export-team-scorecards")
+        else:
+            run_export_team_scorecards()
+
+        if once:
+            break
+        print(f"Sleeping {sleep_seconds}s before next cheap iteration...")
+        sleep_fn(sleep_seconds)
 
 
 def run_week_competition_status() -> None:
@@ -1725,6 +1847,38 @@ def main() -> None:
     daily_review_parser.add_argument(
         "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
     )
+    subparsers.add_parser(
+        "llm-routing-status",
+        help="Show task-specific LLM model routing (model names only; never secrets)",
+    )
+    cheap_loop_parser = subparsers.add_parser(
+        "run-cheap-competition-loop",
+        help="Cost-saving runner: refresh + gate every interval; full LLM cycle only when the gate says so",
+    )
+    cheap_loop_parser.add_argument("--once", action="store_true", help="Run a single iteration and exit.")
+    cheap_loop_parser.add_argument(
+        "--sleep-seconds", type=int, default=900, help="Seconds to sleep between iterations. Defaults to 900."
+    )
+    cheap_loop_parser.add_argument(
+        "--team", choices=("team_alpha", "team_beta", "both"), default="both",
+        help="Team(s) to evaluate each iteration. Defaults to both.",
+    )
+    cheap_loop_parser.add_argument(
+        "--market-hours-only", dest="market_hours_only", action="store_true", default=True,
+        help="Only run full cycles when the market is open (best-effort). Default.",
+    )
+    cheap_loop_parser.add_argument(
+        "--no-market-hours-only", dest="market_hours_only", action="store_false",
+        help="Run full cycles regardless of market open status.",
+    )
+    cheap_loop_parser.add_argument(
+        "--run-review-only-when-skipped", action="store_true",
+        help="When the gate skips a full cycle, run a review-only cycle instead (advisory, no orders).",
+    )
+    cheap_loop_parser.add_argument(
+        "--dry-run-loop", action="store_true",
+        help="Print intended actions each iteration without running full cycles.",
+    )
     subparsers.add_parser("week-competition-status", help="Show Alpha vs Beta competition status and ranking")
     subparsers.add_parser("stop-week-competition", help="Stop the weekly paper competition")
     learning_parser = subparsers.add_parser("team-learning-status", help="Show a team's learning ledger")
@@ -1857,6 +2011,17 @@ def main() -> None:
         run_daily_spy_attribution(team=args.team)
     elif args.command == "export-daily-team-review":
         run_export_daily_team_review(team=args.team)
+    elif args.command == "llm-routing-status":
+        run_llm_routing_status()
+    elif args.command == "run-cheap-competition-loop":
+        run_cheap_competition_loop(
+            once=args.once,
+            sleep_seconds=args.sleep_seconds,
+            team=args.team,
+            market_hours_only=args.market_hours_only,
+            run_review_only_when_skipped=args.run_review_only_when_skipped,
+            dry_run_loop=args.dry_run_loop,
+        )
     elif args.command == "week-competition-status":
         run_week_competition_status()
     elif args.command == "stop-week-competition":
