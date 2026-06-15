@@ -34,9 +34,9 @@ Current safety posture:
 - Dry-run is the default workflow.
 - Alpaca paper support exists only behind the project wrapper.
 - No live trading.
-- No executable options.
-- No executable margin.
-- No executable shorting.
+- No executable options yet.
+- No executable margin yet.
+- No executable shorting yet.
 - No LLM direct execution.
 - No real API keys in source.
 
@@ -56,6 +56,14 @@ Runtime artifacts under `data/experiments`, `data/reports`, `data/notes`, and lo
 - Hermes tournament round runner for local-only route-score team rankings from registry and proposal JSON files.
 - Opt-in Hermes runtime adapter for generating strict local sandbox proposal JSON through a configured OpenAI-compatible endpoint.
 - Local Discord command-center bot for safe status, team, proposal review, and tournament summaries.
+- Discord team paper status and positions summaries using team-specific Alpaca paper credentials.
+- Explicit Discord paper execution command path for approved stock-long paper orders only.
+- Natural Discord team-channel chat for Team Alpha and Team Beta, with active research, risk, and review agent responses saved under ignored runtime notes.
+- Gated autonomous paper-cycle scaffold that requires explicit team autonomy, paper-stocks-only mode, research proposal JSON, risk-agent approval token, review-agent approval token, daily order/notional cap checks, deterministic Python risk approval, and the Alpaca paper-only wrapper.
+- Manual Discord report scaffolds for schedule status and daily team paper summaries.
+- Default two-team Hermes competition registry with Team Alpha and Team Beta, each with active research, risk, and review agents.
+- Team-specific Alpaca paper credential validation for future paper competitions, without exposing secrets.
+- Phase 7F proposal routing for `stock_long`, `stock_short`, `stock_margin_long`, `stock_margin_short`, `option_long_call`, `option_long_put`, `covered_call`, and `cash_secured_put`.
 - Tournament scoring and ranking with a beginner-readable formula.
 - Tournament history review from saved comparison artifacts.
 - Tournament champion report across saved ranked tournaments.
@@ -86,7 +94,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Fill `.env` with paper credentials only if you want to inspect Alpaca paper status. Never commit `.env`.
+Fill `.env` with paper credentials only if you want to inspect Alpaca paper status. For Team Alpha/Team Beta Discord paper competition, use the team-specific `TEAM_ALPHA_ALPACA_*` and `TEAM_BETA_ALPACA_*` keys; generic `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are optional in that setup. For $1,000,000 paper accounts, set `STARTING_EQUITY=1000000` and keep early autonomy caps conservative: `MIN_CASH_PCT=0.10`, `MAX_POSITION_PCT=0.20`, `MAX_DAILY_TURNOVER_PCT=0.30`, and `MAX_NEW_POSITIONS_PER_DAY=10`. Alpaca paper buying power may show 4x equity, but project risk caps should keep exposure lower until margin gates are fully implemented. Never commit `.env`.
 
 Initialize the local database:
 
@@ -195,7 +203,7 @@ Run the local Discord command-center bot after setting a bot token:
 python -m src.main discord-bot
 ```
 
-See `docs/discord_bot_setup.md` for beginner setup steps. The bot supports `!status`, `!teams`, `!review_proposals`, `!run_tournament`, and `!ask_team`, plus slash commands when Discord sync succeeds.
+See `docs/discord_bot_setup.md` for beginner setup steps. The bot supports natural chat in configured `#team-alpha` and `#team-beta` channels. It also supports `!status`, `!teams`, `!team_paper_status`, `!team_positions`, `!review_proposals`, `!run_tournament`, `!ask_team`, `!ask_agent`, `!latest_agent_run`, `!paper_trade_team`, `!team_report`, `!autonomy_status`, `!enable_autonomy`, `!disable_autonomy`, `!run_team_cycle`, `!schedule_reports_status`, and `!daily_team_report_now`, plus slash commands when Discord sync succeeds.
 
 Ask a configured Hermes team for proposal JSON from Discord:
 
@@ -277,7 +285,11 @@ Use `hermes-tournament-round` to rank teams by local proposal routing counts. Th
 
 Use `hermes-generate-proposals` only after explicitly setting `HERMES_ENABLED=true`, `HERMES_BASE_URL`, and `HERMES_MODEL`. It calls a generic OpenAI-compatible chat completions endpoint, saves raw generated JSON under a local path such as `data/agent_runs`, then validates that file through `review-hermes-sandbox`. It does not call Alpaca, submit orders, read broker credentials, or change portfolio state.
 
-Use `discord-bot` to run a local Discord command center for safe lab summaries. It requires `DISCORD_BOT_TOKEN`, optionally restricts commands with `DISCORD_ALLOWED_CHANNEL_IDS`, and uses local default files from `DISCORD_DEFAULT_REGISTRY` and `DISCORD_DEFAULT_PROPOSAL`. Discord commands call the same local registry, sandbox review, and tournament routing logic; they do not call Alpaca, place orders, approve execution, or change portfolio state. `!ask_team` uses the existing Hermes runtime config (`HERMES_ENABLED`, `HERMES_BASE_URL`, `HERMES_MODEL`) to save proposal JSON under ignored `data/agent_runs/`, then immediately validates it through the sandbox router. The flow is Discord -> bot -> Hermes runtime -> proposal JSON -> sandbox review, not Discord -> Alpaca.
+Use `discord-bot` to run a local Discord command center and team-chat surface. It requires `DISCORD_BOT_TOKEN`, optionally restricts commands with `DISCORD_ALLOWED_CHANNEL_IDS`, and uses local default files from `DISCORD_DEFAULT_REGISTRY` and `DISCORD_DEFAULT_PROPOSAL`. Set `DISCORD_TEAM_ALPHA_CHANNEL_ID` and `DISCORD_TEAM_BETA_CHANNEL_ID` to route normal non-command messages in those channels to that team's research, risk, and review agents. Natural chat is saved under ignored runtime notes and never trades. `!ask_team` uses the existing Hermes runtime config (`HERMES_ENABLED`, `HERMES_BASE_URL`, `HERMES_MODEL`) to save proposal JSON under ignored `data/agent_runs/`, then immediately validates it through the sandbox router. `!status` reports whether Team Alpha and Team Beta paper credentials are configured without printing secrets. The default flow is Discord -> bot -> Hermes runtime -> proposal JSON or agent notes -> sandbox/review, not Discord -> Alpaca.
+
+Use `!paper_trade_team <team_id> <proposal_path> <risk_approval_note_path> <review_approval_note_path>` as the explicit Discord path that can submit paper orders. It requires risk and review approval notes, reads a saved proposal file, fetches that team's Alpaca paper account and positions, runs deterministic risk gates, logs proposals/risk decisions/orders/snapshots, and submits only approved stock-long paper orders. Stock short, margin, and options proposals are rejected with clear reasons until their paper risk gates and mocked broker support are implemented.
+
+Use `!autonomy_status <team_id>` to inspect a team's autonomous-cycle gates. Use `!enable_autonomy <team_id>` or `!disable_autonomy <team_id>` to update the ignored local runtime autonomy file under `data/notes`. Use `!run_team_cycle <team_id> <prompt>` to run the Phase 7G scaffold: research proposal generation, risk-agent note, review-agent note, and optional paper execution only when autonomy is enabled, mode is `paper_stocks_only`, daily order/notional caps allow it, the risk note ends with `RISK_AGENT_APPROVED: true`, the review note ends with `REVIEW_AGENT_APPROVED: true`, and deterministic Python risk approves stock-long paper orders. A risk or review agent approval alone is never enough, and no live endpoint exists. Use `!daily_team_report_now` for a manual paper-status/positions/latest-proposals summary.
 
 Use `--save` to write durable local research artifacts under `data/experiments` by default:
 
@@ -325,6 +337,10 @@ Phase 7C adds a Hermes tournament round runner for local JSON review only. It co
 Phase 7D adds an opt-in Hermes runtime adapter for local/OpenAI-compatible proposal generation only. Hermes output is strict local sandbox JSON, not trading approval, and generated `data/agent_runs` files are ignored runtime artifacts.
 
 Phase 7E adds a local Discord command-center bot for safe lab commands only. It can report status, teams, proposal review summaries, routing-score tournament summaries, and ask configured Hermes teams for proposal JSON, but it cannot trade, call Alpaca, submit orders, approve execution, or bypass risk controls.
+
+Phase 7F adds the default two-team/six-agent competition registry, team-specific Alpaca paper credential validation, safe paper status/positions commands, strict routing for expanded stock, short, margin, and option proposal types, role-aware `ask_agent`, latest-run helpers, and the explicit `paper_trade_team` stock-long paper submission path. Short, margin, and options proposals route/log for review but are rejected from execution until deterministic paper gates and mocked broker support are implemented.
+
+Phase 7G adds natural Discord team-channel chat, explicit team autonomy status, local autonomy enable/disable commands, manual report scaffolding, and a gated autonomous paper-cycle scaffold. Normal chat, `!ask_team`, `!ask_agent`, and tournaments cannot place trades. Autonomous paper submission remains stock-long paper-only and requires explicit team autonomy, `paper_stocks_only` mode, research proposal JSON, risk and review approval tokens, daily cap checks, deterministic Python risk approval, and the Alpaca paper wrapper. Hermes proposal guidance now rejects or warns on expired options, missing theses, covered-call/cash-secured-put side inconsistencies, stale option expirations, and benchmark-like SPY proposals for beat-SPY goals.
 
 Current executable behavior remains stock-only, long-only, cash-only, no executable options, no executable margin, no executable shorting, no live trading, and no LLM direct execution.
 

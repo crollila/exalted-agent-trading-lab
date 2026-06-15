@@ -15,7 +15,7 @@
       "confidence": 0.72
     },
     {
-      "proposal_type": "short_stock",
+      "proposal_type": "stock_short",
       "symbol": "RISK",
       "target_short_weight": 0.04,
       "estimated_price": 50.0,
@@ -27,26 +27,16 @@
       "forced_cover_threshold": 60.0
     },
     {
-      "proposal_type": "option_long",
-      "contract": {
-        "underlying_symbol": "SPY",
-        "option_type": "call",
-        "expiration": "2031-01-17",
-        "strike": 600.0,
-        "open_interest": 2500,
-        "delta": 0.52,
-        "gamma": 0.03,
-        "theta": -0.04,
-        "vega": 0.11
-      },
-      "action": "buy_to_open",
+      "proposal_type": "option_long_call",
+      "underlying_symbol": "SPY",
+      "option_type": "call",
+      "strike": 600.0,
+      "expiration_date": "2031-01-17",
+      "side": "buy_to_open",
       "contracts": 1,
-      "premium": 4.25,
-      "estimated_total_premium": 425.0,
+      "max_premium": 425.0,
       "thesis": "Defined-risk upside exposure for local option simulation only.",
-      "confidence": 0.61,
-      "liquidity_open_interest_assumption": "Open interest is sufficient for a deterministic local example.",
-      "assignment_exercise_risk_note": "Long option can expire worthless; exercise handling is not enabled."
+      "confidence": 0.61
     },
     {
       "proposal_type": "crypto_pair",

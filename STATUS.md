@@ -2,7 +2,7 @@
 
 ## Current state
 
-Phase 7E Discord bot skeleton completed.
+Phase 7G natural Discord team chat and autonomous paper-cycle scaffolding completed.
 
 Included:
 
@@ -203,6 +203,26 @@ Included:
 - `ask_team` requires the existing Hermes runtime configuration, saves generated proposal JSON under ignored `data/agent_runs/`, validates the saved file through the sandbox router, and returns route counts to Discord.
 - `docs/discord_bot_setup.md` documents beginner setup and run steps without real tokens or IDs.
 - Phase 7E does not call Alpaca, submit orders, write orders, change portfolio state, enable live trading, grant Discord broker access, or allow broker/order/risk bypasses.
+- Default Team Alpha/Team Beta registry now has exactly two active teams and three active agents per team.
+- Team Alpha agents are `alpha_research_01`, `alpha_risk_01`, and `alpha_review_01`.
+- Team Beta agents are `beta_research_01`, `beta_risk_01`, and `beta_review_01`.
+- Team-specific Alpaca paper config reads `TEAM_ALPHA_*` and `TEAM_BETA_*` env vars, enforces paper mode and the exact Alpaca paper base URL, and never prints secrets.
+- Hermes sandbox routing supports Phase 7F proposal types: `stock_long`, `stock_short`, `stock_margin_long`, `stock_margin_short`, `option_long_call`, `option_long_put`, `covered_call`, and `cash_secured_put`.
+- Options proposals are accepted for review/tournament routing only; paper options execution is not enabled yet.
+- Discord now has team paper status, team positions, role-aware ask-agent, latest-agent-run, run-tournament-latest, explicit paper-trade-team, and team-report helpers.
+- `paper_trade_team` is the only explicit Discord command path that can submit paper orders. It requires risk/review approval notes, logs proposals, risk decisions, paper order attempts, and portfolio snapshots, and submits only approved stock-long paper orders.
+- Phase 7F does not add paper short execution, paper margin execution, paper options execution, live trading, Alpaca calls from Hermes, or broker/order/risk bypasses.
+- Natural Discord team chat can be configured with `DISCORD_TEAM_ALPHA_CHANNEL_ID` and `DISCORD_TEAM_BETA_CHANNEL_ID`.
+- Normal non-command messages in configured team channels are routed to that team's active research, risk, and review agents, with responses saved under ignored runtime notes.
+- Team autonomy is explicitly opt-in with `TEAM_ALPHA_AUTONOMY_ENABLED=true` or `TEAM_BETA_AUTONOMY_ENABLED=true`; defaults remain disabled.
+- Team autonomy config includes `paper_stocks_only` mode, max paper orders per day, max daily notional, and risk/review approval requirements.
+- Discord now has autonomy status, enable-autonomy, disable-autonomy, scheduled report status, daily team report, and `run_team_cycle` helpers.
+- `run_team_cycle` generates research proposal JSON, asks the risk agent for `RISK_AGENT_APPROVED: true`, asks the review agent for `REVIEW_AGENT_APPROVED: true`, and stops with no paper orders unless team autonomy and both approval tokens are present.
+- When all autonomous gates are present, `run_team_cycle` reuses the gated `paper_trade_team` execution path, so daily order/notional caps, deterministic Python risk validation, and the Alpaca paper-only wrapper remain the final hard gates.
+- Natural chat, `ask_team`, `ask_agent`, `run_tournament`, and scheduled updates do not submit orders.
+- Hermes sandbox validation now rejects expired option dates, missing theses, covered-call/cash-secured-put side inconsistencies, and stale option expirations.
+- SPY stock-long proposals remain allowed but are warned as benchmark-like when the learning goal is to beat SPY.
+- Phase 7G does not add live trading, paper short execution, paper margin execution, paper options execution, Alpaca calls from Hermes prompts, or broker/order/risk bypasses.
 - Multi-day simulated portfolio and benchmark snapshots that produce non-zero strategy return, SPY return, excess return, and max drawdown where appropriate.
 - Cash-only comparison baseline remains zero-return with no cash yield modeled.
 - Beginner-readable comparison output with rank, strategy ID, run ID, score, starting equity, current equity, strategy return, SPY return, excess return, max drawdown, trade count, and rejected trade count.
@@ -245,10 +265,12 @@ Current allowed mode:
 - Phase 7C adds local-only Hermes tournament round route scoring only; tournament winners are based on proposal routing counts, not profitability or trading approval.
 - Phase 7D adds opt-in Hermes proposal generation only; generated output is local sandbox JSON and must still pass local review/routing before any research use.
 - Phase 7E adds a local Discord command center only; Discord commands summarize local lab state and do not call Alpaca, submit orders, approve execution, or change portfolio state.
+- Phase 7F adds team paper credential validation, expanded proposal routing, and explicit stock-long paper execution only; advanced short/margin/options paper execution remains disabled until deterministic risk gates and mocked broker support are implemented and tested.
+- Phase 7G adds natural Discord team chat and autonomous paper-cycle scaffolding only; normal chat cannot trade, and autonomous paper cycles require explicit team autonomy, paper-stocks-only mode, research proposal JSON, risk and review approval tokens, daily cap checks, deterministic Python risk approval, and the Alpaca paper-only wrapper.
 
 ## Next step
 
-Run the Discord bot locally with a real `DISCORD_BOT_TOKEN` and restricted `DISCORD_ALLOWED_CHANNEL_IDS`, then use it for safe status, team, proposal review, and tournament summaries.
+Run the Discord team-chat loop in the real server, observe Team Alpha and Team Beta paper-cycle behavior, and only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
 
 ## Project manager rule
 

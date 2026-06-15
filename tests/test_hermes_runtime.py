@@ -6,8 +6,11 @@ import sys
 import pytest
 
 from src.agents.hermes_runtime import (
+    HermesAgentChatRequest,
     HermesGenerationRequest,
     HermesRuntimeConfig,
+    ask_hermes_agent,
+    build_hermes_agent_chat_prompt,
     build_hermes_generation_prompt,
     generate_hermes_proposals,
 )
@@ -63,19 +66,87 @@ def test_prompt_requires_json_only_sandbox_schema():
     prompt = build_hermes_generation_prompt(_request())
 
     assert "Output ONLY strict JSON" in prompt
+    assert "paper-only strategy agent" in prompt
+    assert "trying to beat SPY" in prompt
     assert "agent_id" in prompt
     assert "team_id" in prompt
     assert "strategy_id" in prompt
     assert "agent_role" in prompt
     assert "proposals" in prompt
     assert "stock_long" in prompt
-    assert "short_stock" in prompt
-    assert "option_long" in prompt
-    assert "margin" in prompt
+    assert "stock_short" in prompt
+    assert "stock_margin_long" in prompt
+    assert "stock_margin_short" in prompt
+    assert "option_long_call" in prompt
+    assert "option_long_put" in prompt
+    assert "covered_call" in prompt
+    assert "cash_secured_put" in prompt
     assert "No secrets" in prompt
     assert "No execution claims" in prompt
+    assert "Do not claim execution approval" in prompt
+    assert "risk-aware thesis" in prompt
+    assert "Do not invent current market prices" in prompt
+    assert "stale, fake, or guessed current prices" in prompt
+    assert "expired option dates" in prompt
+    assert 'side must be "sell_to_open"' in prompt
+    assert 'side "long" for covered_call or cash_secured_put' in prompt
+    assert "SPY buy-and-hold" in prompt
+    assert "Every proposal must include a non-empty thesis" in prompt
     assert "paper/simulation routing only" in prompt
+    assert "No naked short options" in prompt
+    assert "No 0DTE options" in prompt
     assert "No markdown/prose outside JSON" in prompt
+
+
+def test_agent_chat_prompt_is_role_aware_and_paper_only():
+    prompt = build_hermes_agent_chat_prompt(
+        HermesAgentChatRequest(
+            team_id="team_alpha",
+            agent_id="alpha_risk_01",
+            agent_role="risk_agent",
+            prompt_text="Review strategy risk.",
+        )
+    )
+
+    assert "alpha_risk_01" in prompt
+    assert "risk_agent" in prompt
+    assert "Paper-only research context" in prompt
+    assert "beat SPY" in prompt
+    assert "proposal-only" in prompt
+    assert "Do not claim execution approval" in prompt
+
+
+def test_ask_hermes_agent_saves_response(tmp_path):
+    output_file = tmp_path / "response.md"
+    calls = []
+
+    class FakeTextResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Risk view: proposal-only."}}]}
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeTextResponse()
+
+    result = ask_hermes_agent(
+        HermesRuntimeConfig(enabled=True, base_url="http://127.0.0.1:11434/v1", model="hermes-local"),
+        HermesAgentChatRequest(
+            team_id="team_alpha",
+            agent_id="alpha_review_01",
+            agent_role="review_agent",
+            prompt_text="Summarize latest tournament.",
+        ),
+        output_file,
+        http_post=fake_post,
+    )
+
+    assert calls
+    assert result.output_file == output_file
+    assert result.response_text == "Risk view: proposal-only."
+    assert output_file.read_text(encoding="utf-8") == "Risk view: proposal-only."
 
 
 def test_successful_mocked_generation_saves_file_and_validates(tmp_path):

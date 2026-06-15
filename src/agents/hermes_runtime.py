@@ -101,11 +101,37 @@ class HermesGenerationResult(BaseModel):
         return self.sandbox_result.ok
 
 
+class HermesAgentChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    team_id: str
+    agent_id: str
+    agent_role: str
+    prompt_text: str
+
+    @field_validator("team_id", "agent_id", "agent_role", "prompt_text")
+    @classmethod
+    def required_text_must_not_be_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+
+class HermesAgentChatResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_file: Path
+    response_text: str
+
+
 def build_hermes_generation_prompt(request: HermesGenerationRequest) -> str:
     learning_goal = request.learning_goal or "Generate a small, reviewable proposal set for local sandbox routing."
     strategy_notes = request.strategy_notes or "Use conservative local-research assumptions and include clear theses."
     return f"""
-You are Hermes, a proposal generator for ExaltedFable Agent Trading Lab.
+You are Hermes, a paper-only strategy agent for ExaltedFable Agent Trading Lab.
+
+Your team is trying to beat SPY over time with structured proposal JSON.
 
 Output ONLY strict JSON. Do not use Markdown. Do not include prose outside JSON.
 
@@ -122,14 +148,22 @@ The JSON must match this exact top-level sandbox schema:
 
 Allowed proposal_type values are:
 - "stock_long"
-- "short_stock"
-- "option_long"
-- "margin"
+- "stock_short"
+- "stock_margin_long"
+- "stock_margin_short"
+- "option_long_call"
+- "option_long_put"
+- "covered_call"
+- "cash_secured_put"
 
 For stock_long proposals include: proposal_type, symbol, target_weight or quantity, estimated_price, thesis, confidence.
-For short_stock proposals include: proposal_type, symbol, target_short_weight or notional_exposure, estimated_price, thesis, confidence, borrow_available_assumption, and optional borrow_fee_assumption, max_loss_exit_price, forced_cover_threshold.
-For option_long proposals include: proposal_type, contract, action, contracts, premium, estimated_total_premium, thesis, confidence, liquidity_open_interest_assumption, assignment_exercise_risk_note. The contract must include underlying_symbol, option_type, expiration, and strike.
-For margin proposals include: proposal_type, requested_gross_exposure, thesis, confidence, and optional symbols.
+For stock_short proposals include: proposal_type, symbol, target_short_weight or notional_exposure, estimated_price, thesis, confidence, borrow_available_assumption, and optional borrow_fee_assumption, max_loss_exit_price, forced_cover_threshold.
+For stock_margin_long and stock_margin_short proposals include: proposal_type, symbol, requested_gross_exposure, estimated_price, thesis, confidence, and optional target_weight or notional_exposure.
+For option_long_call, option_long_put, covered_call, and cash_secured_put proposals include: proposal_type, underlying_symbol, option_type, strike, expiration_date, side, max_premium, thesis, confidence, and optional contracts.
+For covered_call proposals include covered_shares of at least contracts * 100.
+For cash_secured_put proposals include cash_reserved of at least strike * contracts * 100.
+For covered_call and cash_secured_put, side must be "sell_to_open" because these are premium-selling strategies.
+For option_long_call and option_long_put, side must be "buy_to_open".
 
 Safety rules:
 - No secrets.
@@ -137,12 +171,46 @@ Safety rules:
 - No broker credentials.
 - No execution claims.
 - No order placement language.
+- Do not claim execution approval.
+- Include risk-aware thesis text for every proposal.
+- You may propose stock long, stock short, margin, and defined options strategies only through JSON.
+- Do not invent current market prices when they are not supplied by Python context.
+- Do not use stale, fake, or guessed current prices. If no current price is supplied, use a clearly-labeled local estimate only for sandbox sizing.
+- Do not use expired option dates, 0DTE options, or option expirations that are not safely in the future.
+- Make option type, strike, side, and thesis consistent. Do not describe a put thesis as a call, or a call thesis as a put.
+- Do not use side "long" for covered_call or cash_secured_put.
+- Do not propose SPY buy-and-hold as a beat-SPY strategy unless the thesis clearly explains how it differs from the benchmark.
+- Every proposal must include a non-empty thesis.
 - Proposals are for paper/simulation routing only.
 - No live trading.
+- No naked short options.
+- No 0DTE options.
 - No markdown/prose outside JSON.
 
 Learning goal: {learning_goal}
 Strategy notes: {strategy_notes}
+""".strip()
+
+
+def build_hermes_agent_chat_prompt(request: HermesAgentChatRequest) -> str:
+    return f"""
+You are Hermes agent {request.agent_id} on {request.team_id}.
+
+Role: {request.agent_role}
+
+Answer the user's Discord prompt concisely as a strategy/research/risk/review agent.
+
+Safety rules:
+- Paper-only research context.
+- The team's objective is to beat SPY over time.
+- If you mention trade ideas, keep them proposal-only.
+- Do not claim execution approval.
+- Do not say an order was placed.
+- Do not call or mention broker credentials.
+- Do not invent current market prices when they are not supplied by Python context.
+- Deterministic Python risk gates decide all approvals.
+
+User prompt: {request.prompt_text}
 """.strip()
 
 
@@ -194,6 +262,50 @@ def generate_hermes_proposals(
         raw_json=raw_json,
         sandbox_result=sandbox_result,
     )
+
+
+def ask_hermes_agent(
+    config: HermesRuntimeConfig,
+    request: HermesAgentChatRequest,
+    output_file: Path | str,
+    *,
+    http_post=None,
+) -> HermesAgentChatResult:
+    config.validate_ready()
+    http_post = http_post or requests.post
+    output_path = Path(output_file)
+    prompt = build_hermes_agent_chat_prompt(request)
+    try:
+        response = http_post(
+            _chat_completions_url(config.base_url),
+            headers=_headers(config),
+            json={
+                "model": config.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a paper-only Hermes research agent. "
+                            "You cannot place orders or access brokers."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+            },
+            timeout=config.timeout_seconds,
+        )
+        response.raise_for_status()
+        response_payload = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Hermes agent request failed: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("Hermes agent response was not valid JSON.") from exc
+
+    response_text = _extract_message_content(response_payload)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(response_text, encoding="utf-8")
+    return HermesAgentChatResult(output_file=output_path, response_text=response_text)
 
 
 def format_hermes_generation_result(result: HermesGenerationResult) -> str:

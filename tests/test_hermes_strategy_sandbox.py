@@ -82,6 +82,218 @@ def test_margin_routes_to_simulation_only_margin_placeholder():
     assert result.route_counts()[SIMULATION_ONLY_MARGIN] == 1
 
 
+def test_phase_7f_structured_proposal_types_route_safely():
+    payload = _valid_payload()
+    payload["proposals"] = [
+        {
+            "proposal_type": "stock_short",
+            "symbol": "risk",
+            "target_short_weight": 0.04,
+            "estimated_price": 50,
+            "thesis": "Paper short candidate for deterministic risk review.",
+            "confidence": 0.6,
+            "borrow_available_assumption": True,
+        },
+        {
+            "proposal_type": "stock_margin_long",
+            "symbol": "msft",
+            "requested_gross_exposure": 1.2,
+            "estimated_price": 420.5,
+            "thesis": "Margin long candidate for deterministic risk review.",
+            "confidence": 0.62,
+        },
+        {
+            "proposal_type": "stock_margin_short",
+            "symbol": "weak",
+            "requested_gross_exposure": 1.1,
+            "estimated_price": 40,
+            "thesis": "Margin short candidate for deterministic risk review.",
+            "confidence": 0.52,
+        },
+        _structured_option("option_long_call", "call", "buy_to_open"),
+        _structured_option("option_long_put", "put", "buy_to_open"),
+        _structured_option("covered_call", "call", "sell_to_open", covered_shares=100),
+        _structured_option("cash_secured_put", "put", "sell_to_open", cash_reserved=50000),
+    ]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.route_counts()[SIMULATION_ONLY_SHORT] == 1
+    assert result.route_counts()[SIMULATION_ONLY_MARGIN] == 2
+    assert result.route_counts()[SIMULATION_ONLY_OPTION] == 4
+    assert result.route_counts()[REJECTED] == 0
+
+
+def test_phase_7f_options_reject_zero_dte_and_naked_short_shapes():
+    payload = _valid_payload()
+    zero_dte = _structured_option("option_long_call", "call", "buy_to_open")
+    zero_dte["expiration_date"] = date.today().isoformat()
+    uncovered_call = _structured_option("covered_call", "call", "sell_to_open")
+    cash_short_put = _structured_option("cash_secured_put", "put", "sell_to_open")
+    payload["proposals"] = [zero_dte, uncovered_call, cash_short_put]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.route_counts()[REJECTED] == 3
+    assert any("0DTE options are disabled" in error for error in result.routed_proposals[0].errors)
+    assert any("covered_shares" in error for error in result.routed_proposals[1].errors)
+    assert any("cash_reserved" in error for error in result.routed_proposals[2].errors)
+
+
+def test_phase_7f_missing_required_symbol_thesis_confidence_is_rejected():
+    payload = _valid_payload()
+    missing_symbol = {
+        "proposal_type": "stock_margin_long",
+        "requested_gross_exposure": 1.1,
+        "estimated_price": 50,
+        "thesis": "Missing symbol.",
+        "confidence": 0.5,
+    }
+    missing_thesis = {
+        "proposal_type": "stock_short",
+        "symbol": "RISK",
+        "target_short_weight": 0.03,
+        "estimated_price": 50,
+        "confidence": 0.5,
+        "borrow_available_assumption": True,
+    }
+    missing_confidence = _structured_option("option_long_call", "call", "buy_to_open")
+    del missing_confidence["confidence"]
+    payload["proposals"] = [missing_symbol, missing_thesis, missing_confidence]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.route_counts()[REJECTED] == 3
+    assert any("symbol" in error for error in result.routed_proposals[0].errors)
+    assert any("thesis" in error for error in result.routed_proposals[1].errors)
+    assert any("confidence" in error for error in result.routed_proposals[2].errors)
+
+
+def test_expired_structured_option_is_rejected():
+    payload = _valid_payload()
+    expired = _structured_option("option_long_call", "call", "buy_to_open")
+    expired["expiration_date"] = (date.today() - timedelta(days=1)).isoformat()
+    payload["proposals"] = [expired]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("expiration_date must be after today" in error for error in result.routed_proposals[0].errors)
+
+
+def test_stock_long_missing_thesis_is_rejected():
+    payload = _valid_payload()
+    missing_thesis = {
+        "proposal_type": "stock_long",
+        "symbol": "MSFT",
+        "target_weight": 0.05,
+        "estimated_price": 100,
+        "confidence": 0.7,
+    }
+    payload["proposals"] = [missing_thesis]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("thesis" in error for error in result.routed_proposals[0].errors)
+
+
+def test_cash_secured_put_without_thesis_is_rejected():
+    payload = _valid_payload()
+    cash_secured_put = _structured_option("cash_secured_put", "put", "sell_to_open", cash_reserved=50000)
+    del cash_secured_put["thesis"]
+    payload["proposals"] = [cash_secured_put]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("thesis" in error for error in result.routed_proposals[0].errors)
+
+
+def test_covered_call_side_action_consistency_is_enforced():
+    payload = _valid_payload()
+    covered_call = _structured_option("covered_call", "call", "long", covered_shares=100)
+    payload["proposals"] = [covered_call]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("covered_call requires side sell_to_open" in error for error in result.routed_proposals[0].errors)
+
+
+def test_stale_option_long_expiration_is_rejected():
+    payload = _valid_payload()
+    payload["proposals"] = [
+        {
+            "proposal_type": "option_long",
+            "contract": {
+                "underlying_symbol": "SPY",
+                "option_type": "call",
+                "expiration": (date.today() - timedelta(days=7)).isoformat(),
+                "strike": 500,
+            },
+            "action": "buy_to_open",
+            "contracts": 1,
+            "premium": 4.25,
+            "estimated_total_premium": 425,
+            "thesis": "Defined-risk long call for simulation.",
+            "confidence": 0.65,
+            "liquidity_open_interest_assumption": "Open interest appears sufficient.",
+            "assignment_exercise_risk_note": "Long options can expire worthless.",
+        }
+    ]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("expiration" in error for error in result.routed_proposals[0].errors)
+
+
+def test_stale_or_fake_option_quote_metadata_is_rejected():
+    payload = _valid_payload()
+    option = _structured_option("option_long_call", "call", "buy_to_open")
+    option["fake_current_price"] = 123.45
+    option["quote_age_days"] = 14
+    payload["proposals"] = [option]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    assert result.routed_proposals[0].route == REJECTED
+    assert any("Extra inputs are not permitted" in error for error in result.routed_proposals[0].errors)
+
+
+def test_stock_long_spy_is_allowed_but_warned_for_beat_spy_goal():
+    payload = _valid_payload()
+    payload["learning_goal"] = "Try to beat SPY over time."
+    payload["proposals"] = [
+        {
+            "proposal_type": "stock_long",
+            "symbol": "SPY",
+            "target_weight": 0.05,
+            "estimated_price": 500,
+            "thesis": "Temporary benchmark-like hedge while waiting for differentiated signals.",
+            "confidence": 0.55,
+        }
+    ]
+
+    result = parse_hermes_sandbox_json(json.dumps(payload))
+
+    assert result.ok
+    routed = result.routed_proposals[0]
+    assert routed.route == PAPER_ELIGIBLE_STOCK_LONG
+    assert routed.warnings
+    assert "benchmark-like" in routed.warnings[0]
+
+
 def test_unknown_proposal_type_is_rejected():
     payload = _valid_payload()
     payload["proposals"] = [{"proposal_type": "crypto_pair", "symbol": "BTCUSD"}]
@@ -250,3 +462,20 @@ def _valid_payload():
             },
         ],
     }
+
+
+def _structured_option(proposal_type, option_type, side, **overrides):
+    value = {
+        "proposal_type": proposal_type,
+        "underlying_symbol": "SPY",
+        "option_type": option_type,
+        "strike": 500,
+        "expiration_date": (date.today() + timedelta(days=45)).isoformat(),
+        "side": side,
+        "max_premium": 425,
+        "contracts": 1,
+        "thesis": "Structured option proposal for local review only.",
+        "confidence": 0.6,
+    }
+    value.update(overrides)
+    return value

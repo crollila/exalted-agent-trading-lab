@@ -1011,11 +1011,78 @@ Not included:
 - Real Discord network calls in tests.
 - Real Hermes network calls in tests.
 
-### Future Phase 7F - Advanced broker-paper implementation gate
+### Phase 7F - Two-team Discord Alpaca paper competition foundations
+
+Status: complete for registry, team paper config validation, expanded proposal routing, safe Discord team account commands, and explicit stock-long paper execution. Advanced short/margin/options paper execution remains gated.
+
+Goal: shape the Discord/Hermes competition center around exactly two teams, team-specific Alpaca paper accounts, and strict proposal-first advanced strategy routing without allowing Discord or Hermes to bypass Python risk controls.
+
+Included:
+
+- Default registry at `docs/examples/hermes_team_registry_example.json` with exactly two active teams and three active agents per team.
+- Team Alpha agents: `alpha_research_01`, `alpha_risk_01`, and `alpha_review_01`.
+- Team Beta agents: `beta_research_01`, `beta_risk_01`, and `beta_review_01`.
+- Team-specific Alpaca paper configuration loader for `TEAM_ALPHA_*` and `TEAM_BETA_*` env vars.
+- Paper enforcement requires `*_ALPACA_PAPER=true` and base URL exactly `https://paper-api.alpaca.markets`.
+- Safe config status messages that do not print secrets and do not crash the bot when credentials are missing.
+- Expanded Hermes sandbox proposal types for `stock_long`, `stock_short`, `stock_margin_long`, `stock_margin_short`, `option_long_call`, `option_long_put`, `covered_call`, and `cash_secured_put`.
+- Strict rejection for unknown proposal types, missing symbols/underlying symbols, missing thesis, missing confidence, 0DTE options, and uncovered/collateral-missing short-option shapes.
+- Runtime prompt updated to request the Phase 7F proposal vocabulary.
+- Discord `!team_paper_status` and `!team_positions` commands for team-specific Alpaca paper account summaries.
+- Discord `!ask_agent` for role-aware paper-only agent chat saved under ignored runtime notes.
+- Discord `!latest_agent_run` and `!run_tournament latest` helpers for the newest saved proposal JSON.
+- Discord `!paper_trade_team` as the only explicit paper-submitting command path.
+- `!paper_trade_team` requires risk/review approval notes, logs proposals, risk decisions, paper order attempts, and portfolio snapshots, and submits only approved stock-long paper orders.
+- Discord `!team_report` reports clearly when benchmark data is not available.
+
+Not included:
+
+- Paper short execution.
+- Paper margin execution.
+- Paper options execution.
+- Alpaca calls from Hermes.
+- Live trading.
+- Risk bypasses.
+
+### Phase 7G - Natural Discord team chat and autonomous paper-cycle scaffolding
+
+Status: complete for natural team-channel chat, explicit autonomy status, scheduled update scaffolding, and gated stock-long autonomous paper-cycle scaffolding.
+
+Goal: make Discord feel like a Team Alpha / Team Beta agent workspace instead of a command-only bot, while keeping Python risk and paper-only broker boundaries as hard gates.
+
+Included:
+
+- Natural team chat routing from configured Discord channels with `DISCORD_TEAM_ALPHA_CHANNEL_ID` and `DISCORD_TEAM_BETA_CHANNEL_ID`.
+- Normal non-command team-channel messages are sent to that team's active research, risk, and review agents.
+- Agent team-chat responses are saved under ignored runtime notes and marked as no-trade chat.
+- Explicit per-team autonomy flags with `TEAM_ALPHA_AUTONOMY_ENABLED` and `TEAM_BETA_AUTONOMY_ENABLED`, defaulting to disabled.
+- Per-team autonomy mode, daily paper order cap, daily notional cap, and risk/review approval requirement env vars.
+- Local ignored runtime autonomy overrides through `enable_autonomy` and `disable_autonomy`.
+- Discord team autonomy status helpers that list the full paper-cycle gates.
+- Scheduled team progress update scaffolding with `DISCORD_SCHEDULED_TEAM_UPDATES_ENABLED` and `DISCORD_SCHEDULED_TEAM_UPDATE_MINUTES`.
+- `run_team_cycle` helper that asks the research agent for proposal JSON, asks the risk agent for `RISK_AGENT_APPROVED: true`, asks the review agent for `REVIEW_AGENT_APPROVED: true`, and stops unless all gates are present.
+- Autonomous paper execution reuses the gated `paper_trade_team` path only when team autonomy is enabled, both approval tokens are present, stock-long-only mode is active, and daily order/notional caps pass.
+- Manual `schedule_reports_status` and `daily_team_report_now` report scaffolds without adding an external scheduler.
+- Deterministic Python risk validation remains the final hard gate before stock-long paper submission.
+- Hermes prompt and sandbox validation improvements for expired options, missing theses, covered-call/cash-secured-put side consistency, stale option expirations, and benchmark-like SPY warnings for beat-SPY goals.
+- Tests cover team channel parsing, autonomy parsing, natural chat fan-out, scheduled update text, disabled-autonomy refusal, enabled-autonomy approved paper submission, daily cap enforcement, manual report summaries, and Hermes validation warnings/rejections.
+
+Not included:
+
+- Live trading.
+- Paper short execution.
+- Paper margin execution.
+- Paper options execution.
+- Alpaca calls from Hermes prompts.
+- Natural chat order placement.
+- `ask_team`, `ask_agent`, or tournament order placement.
+- Risk bypasses.
+
+### Future Phase 7H - Advanced broker-paper implementation gate
 
 Status: planned, not implemented.
 
-Goal: consider paper broker implementation only after simulator and risk tests pass, docs are updated, and the user explicitly approves a later phase.
+Goal: consider advanced paper broker implementation only after simulator and risk tests pass, docs are updated, and the user explicitly approves a later phase.
 
 Strategies:
 

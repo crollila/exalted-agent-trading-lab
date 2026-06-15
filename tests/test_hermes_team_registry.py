@@ -88,10 +88,14 @@ def test_format_prints_teams_agents_status_roles_and_safety_line():
     output = format_hermes_team_registry(parse_hermes_team_registry_json(json.dumps(_valid_registry())))
 
     assert "registry only; no trading or LLM calls" in output
-    assert "team_alpha (Alpha Research Desk) [active]" in output
-    assert "alpha_review_01 (Alpha Reviewer) [inactive] role=review_agent" in output
-    assert "team_beta (Beta Strategy Forge) [active]" in output
-    assert "beta_execution_01 (Beta Execution Shadow) [inactive] role=execution_agent" in output
+    assert "team_alpha (Team Alpha) [active]" in output
+    assert "alpha_research_01 (Alpha Research) [active] role=research_agent" in output
+    assert "alpha_risk_01 (Alpha Risk) [active] role=risk_agent" in output
+    assert "alpha_review_01 (Alpha Review) [active] role=review_agent" in output
+    assert "team_beta (Team Beta) [active]" in output
+    assert "beta_research_01 (Beta Research) [active] role=research_agent" in output
+    assert "beta_risk_01 (Beta Risk) [active] role=risk_agent" in output
+    assert "beta_review_01 (Beta Review) [active] role=review_agent" in output
 
 
 def test_cli_works_without_credentials():
@@ -122,7 +126,8 @@ def test_cli_works_without_credentials():
     assert "team_alpha" in result.stdout
     assert "team_beta" in result.stdout
     assert "role=research_agent" in result.stdout
-    assert "role=portfolio_manager" in result.stdout
+    assert "role=risk_agent" in result.stdout
+    assert "role=review_agent" in result.stdout
     assert "Traceback" not in result.stderr
 
 
@@ -195,7 +200,7 @@ def _valid_registry():
         "teams": [
             {
                 "team_id": "team_alpha",
-                "team_name": "Alpha Research Desk",
+                "team_name": "Team Alpha",
                 "description": "Balanced research team.",
                 "active": True,
                 "strategy_family": "quality_momentum",
@@ -204,7 +209,7 @@ def _valid_registry():
                     {
                         "agent_id": "alpha_research_01",
                         "team_id": "team_alpha",
-                        "agent_name": "Alpha Scout",
+                        "agent_name": "Alpha Research",
                         "role": "research_agent",
                         "description": "Finds candidate ideas.",
                         "active": True,
@@ -215,37 +220,53 @@ def _valid_registry():
                         "learning_notes": "Improve scenario notes.",
                     },
                     {
+                        "agent_id": "alpha_risk_01",
+                        "team_id": "team_alpha",
+                        "agent_name": "Alpha Risk",
+                        "role": "risk_agent",
+                        "description": "Reviews risk assumptions.",
+                        "active": True,
+                    },
+                    {
                         "agent_id": "alpha_review_01",
                         "team_id": "team_alpha",
-                        "agent_name": "Alpha Reviewer",
+                        "agent_name": "Alpha Review",
                         "role": "review_agent",
                         "description": "Summarizes outcomes.",
-                        "active": False,
+                        "active": True,
                     },
                 ],
             },
             {
                 "team_id": "team_beta",
-                "team_name": "Beta Strategy Forge",
+                "team_name": "Team Beta",
                 "description": "Experimental mutation team.",
                 "active": True,
                 "strategy_family": "adaptive_sandbox",
                 "agents": [
                     {
-                        "agent_id": "beta_mutator_01",
+                        "agent_id": "beta_research_01",
                         "team_id": "team_beta",
-                        "agent_name": "Beta Mutator",
-                        "role": "strategy_mutator",
-                        "description": "Creates variants.",
+                        "agent_name": "Beta Research",
+                        "role": "research_agent",
+                        "description": "Finds candidate ideas.",
                         "active": True,
                     },
                     {
-                        "agent_id": "beta_execution_01",
+                        "agent_id": "beta_risk_01",
                         "team_id": "team_beta",
-                        "agent_name": "Beta Execution Shadow",
-                        "role": "execution_agent",
-                        "description": "Non-executing execution-plan identity.",
-                        "active": False,
+                        "agent_name": "Beta Risk",
+                        "role": "risk_agent",
+                        "description": "Reviews risk assumptions.",
+                        "active": True,
+                    },
+                    {
+                        "agent_id": "beta_review_01",
+                        "team_id": "team_beta",
+                        "agent_name": "Beta Review",
+                        "role": "review_agent",
+                        "description": "Summarizes outcomes.",
+                        "active": True,
                     },
                 ],
             },

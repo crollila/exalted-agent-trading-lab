@@ -1,90 +1,91 @@
 {
-  "registry_notes": "Local identity registry for Hermes-style agent team tournaments. No secrets, credentials, endpoints, or broker access.",
+  "registry_notes": "Default two-team Hermes competition registry. No secrets, credentials, endpoints, or broker access. Discord talks to these agent identities; Python code owns all risk and broker boundaries.",
   "teams": [
     {
       "team_id": "team_alpha",
-      "team_name": "Alpha Research Desk",
-      "description": "Balanced research team focused on cautious equity strategy proposals.",
+      "team_name": "Team Alpha",
+      "description": "Balanced Hermes team for proposal research, risk review, and post-round review.",
       "active": true,
       "strategy_family": "quality_momentum",
-      "learning_notes": "Needs to compare momentum ideas against drawdown and rejected-trade penalties.",
+      "learning_notes": "Try to beat SPY with proposal-first strategies while respecting deterministic risk gates.",
       "agents": [
         {
           "agent_id": "alpha_research_01",
           "team_id": "team_alpha",
-          "agent_name": "Alpha Scout",
+          "agent_name": "Alpha Research",
           "role": "research_agent",
-          "description": "Finds candidate stock themes for local sandbox review.",
+          "description": "Develops structured strategy proposal JSON for sandbox review.",
           "active": true,
-          "model_hint": "local-hermes-placeholder",
           "strengths": ["theme discovery", "clear theses"],
           "weaknesses": ["can overrate momentum"],
-          "latest_strategy_id": "alpha_quality_momentum_v1",
-          "learning_notes": "Improve downside scenario notes."
+          "latest_strategy_id": "team_alpha_discord_v1",
+          "learning_notes": "Focus on proposals that can be compared against SPY."
         },
         {
           "agent_id": "alpha_risk_01",
           "team_id": "team_alpha",
-          "agent_name": "Alpha Guard",
+          "agent_name": "Alpha Risk",
           "role": "risk_agent",
-          "description": "Reviews proposed risk assumptions before tournament submission.",
+          "description": "Reviews risk assumptions and rejection reasons before paper-only approval paths.",
           "active": true,
           "strengths": ["position sizing", "risk language"],
           "weaknesses": ["slow to accept new strategy families"],
-          "learning_notes": "Track common rejection reasons."
+          "learning_notes": "Flag missing thesis, confidence, symbol, collateral, or borrow assumptions."
         },
         {
           "agent_id": "alpha_review_01",
           "team_id": "team_alpha",
-          "agent_name": "Alpha Reviewer",
+          "agent_name": "Alpha Review",
           "role": "review_agent",
-          "description": "Summarizes tournament outcomes and learning notes.",
-          "active": false,
-          "strengths": ["post-run summaries"],
-          "weaknesses": ["inactive in current round"]
+          "description": "Summarizes tournament results, SPY comparison, and team lessons.",
+          "active": true,
+          "strengths": ["post-round summaries", "learning notes"],
+          "weaknesses": ["needs enough logged rounds for stronger conclusions"],
+          "learning_notes": "Compare route quality, rejections, and benchmark results."
         }
       ]
     },
     {
       "team_id": "team_beta",
-      "team_name": "Beta Strategy Forge",
-      "description": "Experimental team focused on mutating strategies for future sandbox tournaments.",
+      "team_name": "Team Beta",
+      "description": "Experimental Hermes team for proposal research, risk review, and post-round review.",
       "active": true,
       "strategy_family": "adaptive_sandbox",
-      "learning_notes": "Compare aggressive mutations against cash-only and SPY baselines.",
+      "learning_notes": "Try to beat SPY with differentiated proposal sets while respecting deterministic risk gates.",
       "agents": [
         {
-          "agent_id": "beta_mutator_01",
+          "agent_id": "beta_research_01",
           "team_id": "team_beta",
-          "agent_name": "Beta Mutator",
-          "role": "strategy_mutator",
-          "description": "Creates local-only strategy variants for later review.",
+          "agent_name": "Beta Research",
+          "role": "research_agent",
+          "description": "Develops structured strategy proposal JSON for sandbox review.",
           "active": true,
-          "model_hint": "local-hermes-placeholder",
           "strengths": ["variant generation", "scenario thinking"],
           "weaknesses": ["may overfit recent fixture winners"],
-          "latest_strategy_id": "beta_adaptive_v1",
-          "learning_notes": "Needs stricter robustness checks."
+          "latest_strategy_id": "team_beta_discord_v1",
+          "learning_notes": "Focus on proposals with clear benchmark and drawdown rationale."
         },
         {
-          "agent_id": "beta_portfolio_01",
+          "agent_id": "beta_risk_01",
           "team_id": "team_beta",
-          "agent_name": "Beta Allocator",
-          "role": "portfolio_manager",
-          "description": "Coordinates team-level proposal summaries for local review.",
+          "agent_name": "Beta Risk",
+          "role": "risk_agent",
+          "description": "Reviews risk assumptions and rejection reasons before paper-only approval paths.",
           "active": true,
-          "strengths": ["allocation framing", "team synthesis"],
-          "weaknesses": ["limited history"]
+          "strengths": ["stress-case framing", "collateral checks"],
+          "weaknesses": ["limited historical evidence"],
+          "learning_notes": "Flag uncollateralized options, 0DTE options, and missing borrow assumptions."
         },
         {
-          "agent_id": "beta_execution_01",
+          "agent_id": "beta_review_01",
           "team_id": "team_beta",
-          "agent_name": "Beta Execution Shadow",
-          "role": "execution_agent",
-          "description": "Placeholder identity for future non-executing execution-plan review.",
-          "active": false,
-          "strengths": ["dry-run process notes"],
-          "weaknesses": ["no order authority"]
+          "agent_name": "Beta Review",
+          "role": "review_agent",
+          "description": "Summarizes tournament results, SPY comparison, and team lessons.",
+          "active": true,
+          "strengths": ["comparative summaries", "experiment notes"],
+          "weaknesses": ["needs enough logged rounds for stronger conclusions"],
+          "learning_notes": "Compare route quality, rejections, and benchmark results."
         }
       ]
     }

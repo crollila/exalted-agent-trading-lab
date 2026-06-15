@@ -1,8 +1,8 @@
 {
-  "agent_id": "beta_mutator_01",
+  "agent_id": "beta_research_01",
   "team_id": "team_beta",
-  "strategy_id": "beta_adaptive_v1",
-  "agent_role": "strategy_mutator",
+  "strategy_id": "team_beta_discord_v1",
+  "agent_role": "research_agent",
   "strategy_notes": "Beta team local sandbox proposal for tournament-round routing.",
   "learning_goal": "Test whether a cleaner mixed proposal beats a rejected-heavy round on routing score.",
   "proposals": [
@@ -15,9 +15,10 @@
       "confidence": 0.66
     },
     {
-      "proposal_type": "margin",
+      "proposal_type": "stock_margin_long",
+      "symbol": "NVDA",
       "requested_gross_exposure": 1.15,
-      "symbols": ["NVDA", "SPY"],
+      "estimated_price": 875.0,
       "thesis": "Simulation-only margin overlay idea for future research scoring.",
       "confidence": 0.45
     }

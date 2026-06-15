@@ -23,6 +23,32 @@ ALPACA_PAPER=true
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
 ```
 
+For Discord team competitions, team-specific keys are preferred and the generic `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` values are optional:
+
+```env
+TEAM_ALPHA_ALPACA_API_KEY=your_team_alpha_paper_key_here
+TEAM_ALPHA_ALPACA_SECRET_KEY=your_team_alpha_paper_secret_here
+TEAM_ALPHA_ALPACA_PAPER=true
+TEAM_ALPHA_ALPACA_BASE_URL=https://paper-api.alpaca.markets
+
+TEAM_BETA_ALPACA_API_KEY=your_team_beta_paper_key_here
+TEAM_BETA_ALPACA_SECRET_KEY=your_team_beta_paper_secret_here
+TEAM_BETA_ALPACA_PAPER=true
+TEAM_BETA_ALPACA_BASE_URL=https://paper-api.alpaca.markets
+```
+
+For $1,000,000 paper accounts, use:
+
+```env
+STARTING_EQUITY=1000000
+MIN_CASH_PCT=0.10
+MAX_POSITION_PCT=0.20
+MAX_DAILY_TURNOVER_PCT=0.30
+MAX_NEW_POSITIONS_PER_DAY=10
+```
+
+For early autonomy, keep `MAX_NEW_POSITIONS_PER_DAY=10`; do not raise it to broad values like 200. Alpaca paper buying power may show 4x equity, but this project should keep exposure lower through project risk caps until dedicated margin gates are fully implemented and tested.
+
 ## Check paper account status
 
 After `.env` is configured with paper credentials, run:

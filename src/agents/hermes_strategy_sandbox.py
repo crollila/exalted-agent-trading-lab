@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import date
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Literal
@@ -9,7 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from src.brokers.order_models import AssetClass, TradeAction, TradeProposal
-from src.risk.options_models import OptionAction, OptionProposal
+from src.risk.options_models import OptionAction, OptionProposal, OptionType
 from src.risk.shorting_models import ShortAction, ShortProposal
 
 
@@ -19,7 +20,19 @@ SIMULATION_ONLY_OPTION = "simulation_only_option"
 SIMULATION_ONLY_MARGIN = "simulation_only_margin"
 REJECTED = "rejected"
 
-KNOWN_PROPOSAL_TYPES = {"stock_long", "short_stock", "option_long", "margin"}
+KNOWN_PROPOSAL_TYPES = {
+    "stock_long",
+    "short_stock",
+    "stock_short",
+    "stock_margin_long",
+    "stock_margin_short",
+    "option_long",
+    "option_long_call",
+    "option_long_put",
+    "covered_call",
+    "cash_secured_put",
+    "margin",
+}
 ROUTE_ORDER = (
     PAPER_ELIGIBLE_STOCK_LONG,
     SIMULATION_ONLY_SHORT,
@@ -105,7 +118,7 @@ class StockLongSandboxProposal(_TextValidatedProposal):
 class ShortStockSandboxProposal(_TextValidatedProposal):
     model_config = ConfigDict(extra="forbid")
 
-    proposal_type: Literal["short_stock"]
+    proposal_type: Literal["short_stock", "stock_short"]
     symbol: str
     target_short_weight: float | None = Field(default=None, gt=0.0, le=1.0)
     notional_exposure: float | None = Field(default=None, gt=0.0)
@@ -167,14 +180,122 @@ class MarginSandboxProposal(BaseModel):
         return symbols
 
 
+class StockMarginSandboxProposal(_TextValidatedProposal):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_type: Literal["stock_margin_long", "stock_margin_short"]
+    symbol: str
+    requested_gross_exposure: float = Field(gt=0.0)
+    estimated_price: float = Field(gt=0.0)
+    thesis: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    target_weight: float | None = Field(default=None, gt=0.0, le=1.0)
+    notional_exposure: float | None = Field(default=None, gt=0.0)
+
+
+class StructuredOptionSandboxProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_type: Literal["option_long_call", "option_long_put", "covered_call", "cash_secured_put"]
+    underlying_symbol: str
+    option_type: OptionType
+    strike: float = Field(gt=0.0)
+    expiration_date: date
+    side: str
+    max_premium: float = Field(gt=0.0)
+    thesis: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    contracts: int = Field(default=1, gt=0)
+    covered_shares: int | None = Field(default=None, ge=0)
+    cash_reserved: float | None = Field(default=None, ge=0.0)
+
+    @field_validator("underlying_symbol")
+    @classmethod
+    def underlying_symbol_must_not_be_empty(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if not symbol:
+            raise ValueError("underlying_symbol must not be empty")
+        return symbol
+
+    @field_validator("thesis")
+    @classmethod
+    def thesis_must_not_be_empty(cls, value: str) -> str:
+        thesis = value.strip()
+        if not thesis:
+            raise ValueError("thesis must not be empty")
+        return thesis
+
+    @field_validator("side")
+    @classmethod
+    def side_must_not_be_empty(cls, value: str) -> str:
+        side = value.strip().lower()
+        if not side:
+            raise ValueError("side must not be empty")
+        return side
+
+    @field_validator("expiration_date")
+    @classmethod
+    def expiration_must_not_be_zero_dte(cls, value: date) -> date:
+        if value <= date.today():
+            raise ValueError("expiration_date must be after today; 0DTE options are disabled")
+        return value
+
+    @model_validator(mode="after")
+    def validate_strategy_shape(self) -> "StructuredOptionSandboxProposal":
+        thesis_text = self.thesis.lower()
+        if self.proposal_type == "option_long_call":
+            if self.option_type != OptionType.CALL:
+                raise ValueError("option_long_call requires option_type call")
+            if self.side != "buy_to_open":
+                raise ValueError("option_long_call requires side buy_to_open")
+            if "put" in thesis_text and "call" not in thesis_text:
+                raise ValueError("option_long_call thesis appears inconsistent with call strategy")
+        elif self.proposal_type == "option_long_put":
+            if self.option_type != OptionType.PUT:
+                raise ValueError("option_long_put requires option_type put")
+            if self.side != "buy_to_open":
+                raise ValueError("option_long_put requires side buy_to_open")
+            if "call" in thesis_text and "put" not in thesis_text:
+                raise ValueError("option_long_put thesis appears inconsistent with put strategy")
+        elif self.proposal_type == "covered_call":
+            if self.option_type != OptionType.CALL:
+                raise ValueError("covered_call requires option_type call")
+            if self.side != "sell_to_open":
+                raise ValueError("covered_call requires side sell_to_open")
+            if "put" in thesis_text and "call" not in thesis_text:
+                raise ValueError("covered_call thesis appears inconsistent with call strategy")
+            if self.covered_shares is None or self.covered_shares < self.contracts * 100:
+                raise ValueError("covered_call requires covered_shares of at least contracts * 100")
+        elif self.proposal_type == "cash_secured_put":
+            if self.option_type != OptionType.PUT:
+                raise ValueError("cash_secured_put requires option_type put")
+            if self.side != "sell_to_open":
+                raise ValueError("cash_secured_put requires side sell_to_open")
+            if "call" in thesis_text and "put" not in thesis_text:
+                raise ValueError("cash_secured_put thesis appears inconsistent with put strategy")
+            required_cash = self.strike * self.contracts * 100
+            if self.cash_reserved is None or self.cash_reserved < required_cash:
+                raise ValueError("cash_secured_put requires cash_reserved of at least strike * contracts * 100")
+        return self
+
+
 class RoutedHermesProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_index: int
     proposal_type: str
     route: str
-    mapped_proposal: TradeProposal | ShortProposal | OptionProposal | MarginSandboxProposal | None = None
+    mapped_proposal: (
+        TradeProposal
+        | ShortProposal
+        | OptionProposal
+        | MarginSandboxProposal
+        | StockMarginSandboxProposal
+        | StructuredOptionSandboxProposal
+        | None
+    ) = None
     errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
@@ -212,6 +333,7 @@ def parse_hermes_sandbox_json(raw_json: str) -> HermesSandboxResult:
         _route_raw_proposal(
             proposal_index=index,
             strategy_id=request.strategy_id,
+            learning_goal=request.learning_goal,
             raw_proposal=raw_proposal,
         )
         for index, raw_proposal in enumerate(request.proposals)
@@ -254,6 +376,7 @@ def format_hermes_sandbox_result(result: HermesSandboxResult) -> str:
 def _route_raw_proposal(
     proposal_index: int,
     strategy_id: str,
+    learning_goal: str | None,
     raw_proposal: dict[str, Any],
 ) -> RoutedHermesProposal:
     proposal_type = str(raw_proposal.get("proposal_type", "missing"))
@@ -266,17 +389,22 @@ def _route_raw_proposal(
         )
 
     if proposal_type == "stock_long":
-        return _route_stock_long(proposal_index, strategy_id, raw_proposal)
-    if proposal_type == "short_stock":
+        return _route_stock_long(proposal_index, strategy_id, learning_goal, raw_proposal)
+    if proposal_type in {"short_stock", "stock_short"}:
         return _route_short_stock(proposal_index, strategy_id, raw_proposal)
     if proposal_type == "option_long":
         return _route_option_long(proposal_index, strategy_id, raw_proposal)
+    if proposal_type in {"option_long_call", "option_long_put", "covered_call", "cash_secured_put"}:
+        return _route_structured_option(proposal_index, raw_proposal)
+    if proposal_type in {"stock_margin_long", "stock_margin_short"}:
+        return _route_stock_margin(proposal_index, raw_proposal)
     return _route_margin(proposal_index, raw_proposal)
 
 
 def _route_stock_long(
     proposal_index: int,
     strategy_id: str,
+    learning_goal: str | None,
     raw_proposal: dict[str, Any],
 ) -> RoutedHermesProposal:
     try:
@@ -299,6 +427,7 @@ def _route_stock_long(
         proposal_type="stock_long",
         route=PAPER_ELIGIBLE_STOCK_LONG,
         mapped_proposal=mapped,
+        warnings=_stock_long_warnings(proposal, learning_goal),
     )
 
 
@@ -328,7 +457,7 @@ def _route_short_stock(
         return _rejected_route(proposal_index, "short_stock", exc, "Invalid short_stock proposal")
     return RoutedHermesProposal(
         proposal_index=proposal_index,
-        proposal_type="short_stock",
+        proposal_type=proposal.proposal_type,
         route=SIMULATION_ONLY_SHORT,
         mapped_proposal=mapped,
     )
@@ -379,6 +508,40 @@ def _route_margin(
     )
 
 
+def _route_stock_margin(
+    proposal_index: int,
+    raw_proposal: dict[str, Any],
+) -> RoutedHermesProposal:
+    proposal_type = str(raw_proposal.get("proposal_type", "stock_margin"))
+    try:
+        proposal = StockMarginSandboxProposal.model_validate(raw_proposal)
+    except ValidationError as exc:
+        return _rejected_route(proposal_index, proposal_type, exc, f"Invalid {proposal_type} proposal")
+    return RoutedHermesProposal(
+        proposal_index=proposal_index,
+        proposal_type=proposal.proposal_type,
+        route=SIMULATION_ONLY_MARGIN,
+        mapped_proposal=proposal,
+    )
+
+
+def _route_structured_option(
+    proposal_index: int,
+    raw_proposal: dict[str, Any],
+) -> RoutedHermesProposal:
+    proposal_type = str(raw_proposal.get("proposal_type", "option"))
+    try:
+        proposal = StructuredOptionSandboxProposal.model_validate(raw_proposal)
+    except ValidationError as exc:
+        return _rejected_route(proposal_index, proposal_type, exc, f"Invalid {proposal_type} proposal")
+    return RoutedHermesProposal(
+        proposal_index=proposal_index,
+        proposal_type=proposal.proposal_type,
+        route=SIMULATION_ONLY_OPTION,
+        mapped_proposal=proposal,
+    )
+
+
 def _rejected_route(
     proposal_index: int,
     proposal_type: str,
@@ -393,6 +556,15 @@ def _rejected_route(
     )
 
 
+def _stock_long_warnings(proposal: StockLongSandboxProposal, learning_goal: str | None) -> list[str]:
+    goal = (learning_goal or "").lower()
+    if proposal.symbol == "SPY" and "beat spy" in goal:
+        return [
+            "SPY stock_long is benchmark-like for a beat-SPY goal; thesis should explain how it differs from buy-and-hold SPY."
+        ]
+    return []
+
+
 def _validation_errors(exc: ValidationError, prefix: str) -> list[str]:
     errors = []
     for error in exc.errors():
@@ -404,14 +576,23 @@ def _validation_errors(exc: ValidationError, prefix: str) -> list[str]:
 def _proposal_detail(proposal: RoutedHermesProposal) -> str:
     if proposal.errors:
         return f": {'; '.join(proposal.errors)}"
+    warning_detail = f"; warnings: {'; '.join(proposal.warnings)}" if proposal.warnings else ""
     mapped = proposal.mapped_proposal
     if isinstance(mapped, TradeProposal):
-        return f": {mapped.symbol}"
+        return f": {mapped.symbol}{warning_detail}"
     if isinstance(mapped, ShortProposal):
-        return f": {mapped.symbol}"
+        return f": {mapped.symbol}{warning_detail}"
     if isinstance(mapped, OptionProposal):
         contract = mapped.contract
-        return f": {contract.underlying_symbol} {contract.option_type.value} {contract.expiration} {contract.strike:g}"
+        return f": {contract.underlying_symbol} {contract.option_type.value} {contract.expiration} {contract.strike:g}{warning_detail}"
+    if isinstance(mapped, StructuredOptionSandboxProposal):
+        return (
+            f": {mapped.underlying_symbol} {mapped.option_type.value} "
+            f"{mapped.expiration_date} {mapped.strike:g}; paper options execution not enabled yet{warning_detail}"
+        )
+    if isinstance(mapped, StockMarginSandboxProposal):
+        direction = "long" if mapped.proposal_type == "stock_margin_long" else "short"
+        return f": {mapped.symbol} margin {direction}; requested gross exposure {mapped.requested_gross_exposure:.2f}{warning_detail}"
     if isinstance(mapped, MarginSandboxProposal):
-        return f": requested gross exposure {mapped.requested_gross_exposure:.2f}"
+        return f": requested gross exposure {mapped.requested_gross_exposure:.2f}{warning_detail}"
     return ""

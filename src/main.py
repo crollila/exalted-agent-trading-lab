@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
+
 from src.agents.hermes_team_registry import format_hermes_team_registry, load_hermes_team_registry_file
 from src.agents.hermes_strategy_sandbox import format_hermes_sandbox_result, load_hermes_sandbox_file
 from src.agents.hermes_tournament_round import (
@@ -495,7 +497,14 @@ def _apply_status_filter(
     return filter_strategy_ids_by_status(strategy_names, status_by_strategy, status_filter)
 
 
+def load_cli_dotenv() -> None:
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path=dotenv_path, override=False)
+
+
 def main() -> None:
+    load_cli_dotenv()
     parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
