@@ -1347,3 +1347,44 @@ doing, *why* the cheap gate decided what it decided, and what they are thinking.
 Non-goals (unchanged): no live trading, no new broker execution path, LLMs do not execute trades, no secrets
 posted, no weakening of any safety gate. The deterministic risk engine, PortfolioManager, kill switch, team
 credentials, daily caps, and paper-only wrappers remain authoritative; this phase only *reads* and *reports*.
+
+## Phase 7T - Tomorrow Plan Artifact + Strict Off-Hours Quiet Mode
+
+Goal: (1) one clean, deterministic "Tomorrow Plan" artifact after the daily team review that
+collects what worked/failed, what to stop/keep, what to test, watch/avoid lists, the recommended
+team mode, explicit tomorrow rules, and risk/PortfolioManager stance in a single place; and (2) a
+strict off-hours quiet mode so the cheap loop stays alive but silent outside trading hours.
+
+- New module `src/competition/tomorrow_plan.py`:
+  - `TomorrowPlan` dataclass + `build_tomorrow_plan(team_id, daily_review, learning_status,
+    attribution, competition_status, portfolio_manager_state)` — deterministic, invents nothing
+    (missing inputs → `n/a` / `no update available`).
+  - Recommended mode is one of `conservation` / `exploration` / `risk_reduction` / `hold_observe`.
+    A contradiction (daily review says exploration but the learning ledger says
+    conservation/observe) emits a consistency warning and defaults to the safer stance; a
+    symbol/sector that appears in both the favor and avoid lists emits a mixed-signal warning.
+  - `export_tomorrow_plan` builds + persists `data/reviews/<team>_tomorrow_plan_latest.{json,md}`
+    (atomic writes); `format_tomorrow_plan_terminal` gives concise terminal output.
+  - Optional Discord: `TomorrowPlanDiscordConfig` (`DISCORD_POST_TOMORROW_PLAN`, default false;
+    `DISCORD_TOMORROW_PLAN_CHANNEL` = a special channel name or `team_channels`) +
+    `post_tomorrow_plan_to_discord` (reuses the Phase 7S send/redact/truncate plumbing; posts only
+    after the export command or close, never every loop).
+- New module `src/competition/quiet_mode.py`: `OffHoursQuietConfig.from_env` with
+  `STRICT_MARKET_HOURS_ONLY` (default true) and `ALLOW_OFF_HOURS_{STATUS,ATTRIBUTION,LIVE_EQUITY,
+  DISCORD,LLM_REVIEW}_REFRESH/...` + `OFF_HOURS_POST_ONE_SLEEP_NOTICE`. `quiet_when_closed` and
+  `skipped_when_closed` drive the loop and the status command.
+- Loop integration in `run_cheap_competition_loop`: when the market is closed and strict mode is on,
+  `_run_quiet_off_hours_iteration` runs only the explicitly-allowed off-hours actions, prints one
+  sleep notice per closed-market stretch, then the loop sleeps and continues (it never dies). Market
+  hours keep the existing cheap-gate / team-update / full-review-cycle / scoreboard / Discord behavior.
+- New CLI: `export-tomorrow-plan --team {team_alpha|team_beta|both}` and `market-hours-quiet-status`
+  (market open/closed/unknown + every flag + what the loop skips; no secrets).
+- Tests: `tests/test_phase7t.py` — builder from review/learning/attribution, safe `n/a` on missing
+  data, consistency + mixed-signal warnings, JSON+Markdown export to a tmp `data/reviews` path,
+  `--team both`, Discord disabled by default, market-closed-strict skips everything, explicit allow
+  flag permits only that action, market-open keeps existing behavior, notice does not spam, no secrets.
+
+Non-goals (unchanged): no live trading, no new broker execution path, LLMs summarize/propose only and
+do not execute orders, no secrets posted, no weakening of any safety gate. Quiet mode only *suppresses*
+work; the Tomorrow Plan only *reads* and *reports*. The deterministic risk engine and kill switch
+remain authoritative.

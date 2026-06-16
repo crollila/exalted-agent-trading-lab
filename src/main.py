@@ -56,6 +56,12 @@ from src.competition.daily_review import (
     load_daily_spy_attribution,
     load_latest_daily_team_review,
 )
+from src.competition.quiet_mode import OFF_HOURS_SLEEP_NOTICE, OffHoursQuietConfig
+from src.competition.tomorrow_plan import (
+    export_tomorrow_plan,
+    format_tomorrow_plan_terminal,
+    post_tomorrow_plan_to_discord,
+)
 from src.learning.strategy_memory import format_strategy_memory, update_strategy_memory
 from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
 from src.research.research import build_alpaca_news_fn, build_openai_web_fn
@@ -722,6 +728,47 @@ def run_export_daily_team_review(team: str | None = None) -> None:
         print("")
 
 
+def run_export_tomorrow_plan(team: str = "both") -> None:
+    """Build + persist the Phase 7T Tomorrow Plan artifact(s) under data/reviews/.
+
+    Paper-only, deterministic, no orders. Optionally posts a compact plan to
+    Discord when DISCORD_POST_TOMORROW_PLAN=true (disabled by default).
+    """
+
+    teams = list(WEEK_TEAMS) if team == "both" else [team]
+    for tid in teams:
+        plan, saved = export_tomorrow_plan(tid)
+        print(format_tomorrow_plan_terminal(plan, saved_paths=saved))
+        try:
+            result = post_tomorrow_plan_to_discord(plan)
+            if result.get("sent"):
+                print("(posted compact Tomorrow Plan to Discord)")
+        except Exception as exc:  # noqa: BLE001 - Discord must never crash the export
+            print(f"(Discord tomorrow-plan post unavailable: {exc}; continuing)")
+        print("")
+
+
+def run_market_hours_quiet_status() -> None:
+    """Show strict off-hours quiet-mode config + what the loop skips. No secrets."""
+
+    config = OffHoursQuietConfig.from_env()
+    market_open = _cheap_loop_market_open()
+    state = "open" if market_open is True else ("closed" if market_open is False else "unknown")
+    print("=== Market-hours quiet-mode status (Phase 7T; paper-only, no secrets) ===")
+    print(f"Market: {state}")
+    print(f"STRICT_MARKET_HOURS_ONLY: {config.strict_market_hours_only}")
+    print(f"ALLOW_OFF_HOURS_STATUS_REFRESH: {config.allow_off_hours_status_refresh}")
+    print(f"ALLOW_OFF_HOURS_ATTRIBUTION_REFRESH: {config.allow_off_hours_attribution_refresh}")
+    print(f"ALLOW_OFF_HOURS_LIVE_EQUITY_REFRESH: {config.allow_off_hours_live_equity_refresh}")
+    print(f"ALLOW_OFF_HOURS_DISCORD: {config.allow_off_hours_discord}")
+    print(f"ALLOW_OFF_HOURS_LLM_REVIEW: {config.allow_off_hours_llm_review}")
+    print(f"OFF_HOURS_POST_ONE_SLEEP_NOTICE: {config.post_one_sleep_notice}")
+    print("When the market is closed and strict mode is on, the loop will skip:")
+    for item in config.skipped_when_closed():
+        print(f"  - {item}")
+    print("Deterministic risk gates and the kill switch remain authoritative; LLMs do not execute orders.")
+
+
 def run_llm_routing_status() -> None:
     """Print task-specific model routing. Model NAMES only — never key contents."""
 
@@ -826,6 +873,9 @@ def run_cheap_competition_loop(
         "REVIEW_ONLY_DURING_MARKET_HOURS", "true"
     ).strip().lower() in {"1", "true", "yes", "on"}
     discord_update_config = _discord_iteration_update_config()
+    # Phase 7T: strict off-hours quiet mode (quiet by default when closed).
+    quiet_config = OffHoursQuietConfig.from_env()
+    off_hours_notice_shown = False
 
     while True:
         iteration += 1
@@ -836,6 +886,34 @@ def run_cheap_competition_loop(
 
         market_open = _cheap_loop_market_open() if market_hours_only else None
         market_closed = market_hours_only and market_open is False
+        strict_quiet = quiet_config.quiet_when_closed(market_open)
+        if market_open is not False:
+            # Reset the once-per-stretch notice whenever the market is not closed.
+            off_hours_notice_shown = False
+
+        if strict_quiet:
+            # Phase 7T: stay alive but quiet — only explicitly allowed off-hours
+            # actions run; everything else is skipped. The loop never dies here.
+            off_hours_notice_shown = _run_quiet_off_hours_iteration(
+                teams=teams,
+                iteration=iteration,
+                quiet_config=quiet_config,
+                discord_update_config=discord_update_config,
+                kill_switch_engaged=ks.engaged,
+                run_review_only_when_skipped=run_review_only_when_skipped,
+                llm_review_when_skipped=llm_review_when_skipped,
+                llm_daily_review_at_close=llm_daily_review_at_close,
+                team=team,
+                dry_run_loop=dry_run_loop,
+                once=once,
+                sleep_seconds=sleep_seconds,
+                notice_shown=off_hours_notice_shown,
+            )
+            if once:
+                break
+            print(f"Sleeping {sleep_seconds}s before next cheap iteration...")
+            sleep_fn(sleep_seconds)
+            continue
 
         if market_closed:
             print("Market is closed; staying cheap (refresh/status/export only, no full cycles this iteration).")
@@ -956,6 +1034,118 @@ def run_cheap_competition_loop(
             break
         print(f"Sleeping {sleep_seconds}s before next cheap iteration...")
         sleep_fn(sleep_seconds)
+
+
+def _run_quiet_off_hours_iteration(
+    *,
+    teams: list[str],
+    iteration: int,
+    quiet_config,
+    discord_update_config,
+    kill_switch_engaged: bool,
+    run_review_only_when_skipped: bool,
+    llm_review_when_skipped: bool,
+    llm_daily_review_at_close: bool,
+    team: str,
+    dry_run_loop: bool,
+    once: bool,
+    sleep_seconds: int,
+    notice_shown: bool,
+) -> bool:
+    """Run only the explicitly-allowed off-hours actions, then return the notice flag.
+
+    Phase 7T strict quiet mode: when the market is closed and
+    ``STRICT_MARKET_HOURS_ONLY=true``, the loop stays alive but quiet. Each
+    ``ALLOW_OFF_HOURS_*`` flag re-enables exactly one action; everything else is
+    skipped silently to avoid console spam. Never submits orders; never bypasses
+    risk or the kill switch; Discord failures never crash the loop.
+    """
+
+    # One concise sleep notice per closed-market stretch (or every loop when the
+    # operator has disabled the single-notice behavior).
+    if quiet_config.post_one_sleep_notice:
+        if not notice_shown:
+            print(OFF_HOURS_SLEEP_NOTICE)
+            notice_shown = True
+    else:
+        print(OFF_HOURS_SLEEP_NOTICE)
+
+    # Attribution refresh — off by default when closed.
+    if quiet_config.allow_off_hours_attribution_refresh:
+        if dry_run_loop:
+            print("[dry-run] (off-hours allowed) would run: refresh-proposal-attribution")
+        else:
+            try:
+                run_refresh_proposal_attribution()
+            except SystemExit as exc:
+                print(f"(refresh-proposal-attribution unavailable: exit {exc.code}; continuing loop)")
+            except Exception as exc:  # noqa: BLE001 - never let a cheap step kill the loop
+                print(f"(refresh-proposal-attribution error: {exc}; continuing loop)")
+
+    # Week status (which also performs the live-equity refresh) — off by default.
+    if quiet_config.allow_off_hours_status_refresh:
+        if dry_run_loop:
+            print("[dry-run] (off-hours allowed) would run: week-competition-status")
+        else:
+            run_week_competition_status()
+
+    # LLM review-only / advisory daily review — off by default when closed.
+    if quiet_config.allow_off_hours_llm_review and (
+        run_review_only_when_skipped or llm_review_when_skipped
+    ):
+        for tid in teams:
+            decision, _gate_config = _evaluate_team_cheap_gate(tid)
+            print(
+                f"[{tid}] (off-hours allowed) gate: "
+                f"should_run_full_cycle={decision.should_run_full_cycle} "
+                f"recommend_review_only={decision.recommend_review_only} reason={decision.reason}"
+            )
+            if dry_run_loop:
+                print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
+                if llm_review_when_skipped:
+                    print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
+            else:
+                run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                if llm_review_when_skipped:
+                    try:
+                        run_llm_daily_review(team=tid)
+                    except Exception as exc:  # noqa: BLE001 - advisory step must not kill the loop
+                        print(f"({tid} llm-daily-review unavailable: {exc}; continuing loop)")
+
+    if llm_daily_review_at_close and quiet_config.allow_off_hours_llm_review:
+        if dry_run_loop:
+            print("[dry-run] (off-hours allowed) would run: run-llm-daily-review (market closed; no orders)")
+        else:
+            try:
+                run_llm_daily_review(team=None if team == "both" else team)
+            except Exception as exc:  # noqa: BLE001 - advisory close step must not kill the loop
+                print(f"(llm-daily-review-at-close unavailable: {exc}; continuing loop)")
+
+    # Discord posts (team briefs + scoreboard) — off by default when closed.
+    if quiet_config.allow_off_hours_discord:
+        for tid in teams:
+            _post_discord_iteration_update(
+                config=discord_update_config,
+                team_id=tid,
+                iteration=iteration,
+                cycle_action="market_closed",
+                gate_decision=None,
+                market_state="closed",
+                kill_switch_engaged=kill_switch_engaged,
+                llm_review_when_skipped=llm_review_when_skipped,
+                dry_run=dry_run_loop,
+            )
+        if len(teams) >= 2:
+            _post_discord_competition_summary(
+                config=discord_update_config,
+                iteration=iteration,
+                kill_switch_engaged=kill_switch_engaged,
+                next_wake_seconds=None if once else sleep_seconds,
+                teams=tuple(teams),
+                dry_run=dry_run_loop,
+            )
+
+    return notice_shown
 
 
 def _discord_iteration_update_config():
@@ -2243,6 +2433,18 @@ def main() -> None:
     daily_review_parser.add_argument(
         "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
     )
+    tomorrow_plan_parser = subparsers.add_parser(
+        "export-tomorrow-plan",
+        help="Build + persist the Phase 7T Tomorrow Plan artifact(s) under data/reviews/ (paper-only; no orders)",
+    )
+    tomorrow_plan_parser.add_argument(
+        "--team", choices=("team_alpha", "team_beta", "both"), default="both",
+        help="Team(s) to plan for. Defaults to both.",
+    )
+    subparsers.add_parser(
+        "market-hours-quiet-status",
+        help="Show strict off-hours quiet-mode config + what the cheap loop skips when closed (no secrets)",
+    )
     subparsers.add_parser(
         "llm-routing-status",
         help="Show task-specific LLM model routing (model names only; never secrets)",
@@ -2445,6 +2647,10 @@ def main() -> None:
         run_daily_spy_attribution(team=args.team)
     elif args.command == "export-daily-team-review":
         run_export_daily_team_review(team=args.team)
+    elif args.command == "export-tomorrow-plan":
+        run_export_tomorrow_plan(team=args.team)
+    elif args.command == "market-hours-quiet-status":
+        run_market_hours_quiet_status()
     elif args.command == "llm-routing-status":
         run_llm_routing_status()
     elif args.command == "llm-review-status":

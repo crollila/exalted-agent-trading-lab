@@ -229,3 +229,20 @@ python -m src.main discord-iteration-update --team both --summary --dry-run
 Without `--dry-run`, the command sends only if `ENABLE_DISCORD_ITERATION_UPDATES=true` and the bot
 token + target channel ID are configured; otherwise it reports a safe skip. The same posting happens
 automatically each iteration when you run `run-cheap-competition-loop` with updates enabled.
+
+## Phase 7T: optional Tomorrow Plan post
+
+`export-tomorrow-plan` can optionally post the compact Tomorrow Plan to Discord. It is **disabled by
+default** and posts only after the export command (or at market close) — never on every loop iteration.
+
+```
+DISCORD_POST_TOMORROW_PLAN=false          # default; set true to enable
+DISCORD_TOMORROW_PLAN_CHANNEL=strategy_lab  # a special channel name, or "team_channels"
+```
+
+When `DISCORD_TOMORROW_PLAN_CHANNEL=team_channels`, each team's plan goes to that team's own channel
+(`DISCORD_TEAM_ALPHA_CHANNEL_ID` / `DISCORD_TEAM_BETA_CHANNEL_ID`); otherwise it goes to the named special
+channel (e.g. `DISCORD_STRATEGY_LAB_CHANNEL_ID`). The message reuses the same secret-redaction and
+char-limit guards as the Phase 7S updates, and a missing token/channel reports a safe skip rather than
+crashing. The Tomorrow Plan is paper-only and advisory: LLMs summarize/propose only and never execute
+orders; the deterministic risk engine and the kill switch remain authoritative.

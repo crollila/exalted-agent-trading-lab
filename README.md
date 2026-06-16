@@ -589,6 +589,38 @@ python -m src.main cheap-cycle-gate --team team_alpha        # should_run_full_c
 python -m src.main run-week-cycle --team team_alpha --proposal-source llm --review-only  # review, no orders
 python -m src.main daily-spy-attribution                     # why each team beat/lost to SPY
 python -m src.main export-daily-team-review --team team_alpha  # strategy-debate artifact -> data/reviews/
+python -m src.main export-tomorrow-plan --team both          # Tomorrow Plan artifact -> data/reviews/
+```
+
+**Tomorrow Plan artifact (Phase 7T).** After the daily review, `export-tomorrow-plan` builds one clean,
+deterministic artifact per team that answers the standing questions in a single place: recommended mode
+(`conservation` / `exploration` / `risk_reduction` / `hold_observe`), a one-sentence summary, what worked /
+failed today, what to stop / keep doing, what to test tomorrow, a watchlist + avoid list, risk / buying-power
+constraints, the PortfolioManager stance, explicit tomorrow rules ("do not add shorts", "free buying power
+before new buys"), and consistency / mixed-signal warnings when the daily review and learning ledger disagree
+or a symbol/sector appears in both the favor and avoid lists. It invents nothing — missing inputs degrade to
+`n/a` / `no update available`. Artifacts are written to `data/reviews/<team>_tomorrow_plan_latest.{json,md}`.
+Optional Discord posting is **disabled by default** (`DISCORD_POST_TOMORROW_PLAN=true`,
+`DISCORD_TOMORROW_PLAN_CHANNEL=strategy_lab` or `team_channels`) and posts only after the export command (or
+market close) — never every loop. Paper-only; LLMs do not execute orders; deterministic gates stay authoritative.
+
+```bash
+python -m src.main export-tomorrow-plan --team team_alpha
+python -m src.main export-tomorrow-plan --team team_beta
+python -m src.main export-tomorrow-plan --team both
+```
+
+**Strict off-hours quiet mode (Phase 7T).** Outside trading hours `run-cheap-competition-loop` stays alive but
+goes quiet: with `STRICT_MARKET_HOURS_ONLY=true` (default) a closed market skips the LLM review, Alpaca
+live-equity refresh, attribution refresh, daily-review export, Discord posts, and full/review cycles. It prints
+one notice per closed stretch (`OFF_HOURS_POST_ONE_SLEEP_NOTICE=true`) — "Market closed; strict quiet mode
+active. Sleeping until next interval." — then sleeps. Each `ALLOW_OFF_HOURS_*` flag re-enables exactly one
+action while closed; defaults keep everything quiet. Inspect it with `market-hours-quiet-status` (market
+open/closed/unknown + every flag + what the loop skips; no secrets). During market hours, all existing behavior
+remains. The deterministic risk engine and the kill switch remain authoritative regardless of these flags.
+
+```bash
+python -m src.main market-hours-quiet-status
 ```
 
 Review-only updates memory/scorecard and emits advisory hold/trim/close recommendations but never
@@ -615,6 +647,7 @@ End of day:
   python -m src.main refresh-proposal-attribution
   python -m src.main daily-spy-attribution
   python -m src.main export-daily-team-review
+  python -m src.main export-tomorrow-plan --team both
   python -m src.main export-team-scorecards
 ```
 

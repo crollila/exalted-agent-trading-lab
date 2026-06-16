@@ -166,6 +166,23 @@ are used, and what the advisory review agents learned today.
   never bypasses deterministic risk, review approvals, the Portfolio Manager, autonomy gates, daily caps,
   the kill switch, team credentials, or the paper-only wrapper. Deterministic risk remains authoritative.
 
+Phase 7T — Tomorrow Plan artifact + strict off-hours quiet mode. `export-tomorrow-plan [--team ...]`
+builds one clean, deterministic artifact per team (`src/competition/tomorrow_plan.py`) after the daily
+review: recommended mode (`conservation`/`exploration`/`risk_reduction`/`hold_observe`), a one-sentence
+summary, what worked/failed, stop/keep, what to test tomorrow, watchlist + avoid list, risk/buying-power
+constraints, the PortfolioManager stance, explicit tomorrow rules ("do not add shorts", "free buying power
+before new buys"), plus a consistency warning when the daily review and learning ledger disagree and a
+mixed-signal warning when a symbol/sector appears in both the favor and avoid lists. It invents nothing —
+missing inputs degrade to `n/a`. Artifacts persist to `data/reviews/<team>_tomorrow_plan_latest.{json,md}`.
+Optional Discord posting is disabled by default (`DISCORD_POST_TOMORROW_PLAN`,
+`DISCORD_TOMORROW_PLAN_CHANNEL`) and posts only after export/close, never every loop. Strict off-hours
+quiet mode (`src/competition/quiet_mode.py`) keeps `run-cheap-competition-loop` alive but silent when the
+market is closed (`STRICT_MARKET_HOURS_ONLY=true` by default): no LLM review, live-equity/attribution
+refresh, daily-review export, Discord posts, or full/review cycles; it prints one sleep notice per closed
+stretch then sleeps. Each `ALLOW_OFF_HOURS_*` flag re-enables exactly one action; `market-hours-quiet-status`
+shows the config and what is skipped (no secrets). Paper-only; LLMs do not execute orders; deterministic
+gates and the kill switch remain authoritative.
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 
@@ -437,10 +454,11 @@ Current allowed mode:
 - Phase 7F adds team paper credential validation, expanded proposal routing, and explicit stock-long paper execution only; advanced short/margin/options paper execution remains disabled until deterministic risk gates and mocked broker support are implemented and tested.
 - Phase 7G adds natural Discord team chat and autonomous paper-cycle scaffolding only; normal chat cannot trade, and autonomous paper cycles require explicit team autonomy, paper-stocks-only mode, research proposal JSON, risk and review approval tokens, daily cap checks, deterministic Python risk approval, and the Alpaca paper-only wrapper.
 - Phase 7S adds per-iteration Discord team-thought updates only; the cheap loop posts read-only "team room briefings" (cheap-gate decision, PortfolioManager stance, thesis, learning, SPY-relative performance, broker outcomes) plus an optional Alpha-vs-Beta scoreboard. It reads local artifacts only, never posts secrets, never submits or approves orders, and Discord failures never crash the loop or affect order flow. Disabled by default (`ENABLE_DISCORD_ITERATION_UPDATES=false`); overnight (market closed) stays silent unless explicitly enabled.
+- Phase 7T adds the read-only Tomorrow Plan artifact and strict off-hours quiet mode only. The Tomorrow Plan summarizes local daily-review/learning/attribution data into one advisory artifact and never submits, approves, or sizes orders; its optional Discord post is disabled by default and never posts every loop. Strict off-hours quiet mode only *suppresses* work when the market is closed (LLM review, live-equity/attribution refresh, daily-review export, Discord posts, full/review cycles); it never adds an execution path, and the deterministic risk engine and kill switch remain authoritative. Discord/Alpaca failures never crash the loop.
 
 ## Next step
 
-Run `run-cheap-competition-loop` with `ENABLE_DISCORD_ITERATION_UPDATES=true` against the real server, observe the per-iteration Team Alpha / Team Beta briefings during market hours, confirm overnight stays quiet, and only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
+Run `run-cheap-competition-loop` against the real server, confirm strict off-hours quiet mode stays silent overnight (one sleep notice per closed stretch) and that normal behavior resumes during market hours, review the end-of-day Tomorrow Plan artifacts under `data/reviews/`, and only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
 
 ## Project manager rule
 
