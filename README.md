@@ -218,6 +218,53 @@ The dashboard ("ExaltedFable Command Center") is a **local-only, paper-only** op
 
 Sidebar pages: Overview, Teams, Agents, Agent Hub, Run Cycle, Paper Accounts, Discord Bot, Reports, Runtime Files, Settings, Setup / Secrets, Help / Safety. The **Discord Bot** page starts/stops/inspects the local bot (`python -m src.main discord-bot`) without a terminal, using PID/log files under the git-ignored `data/runtime/`; no secrets are passed on the command line. The **Agent Hub** page lets you talk to agents from the UI with four modes — **Team Chat** and **Agent Chat** for natural conversation (defaults to Team Chat), plus **Ask Team/Agent for Proposal** for the structured proposal-only paths. No Agent Hub mode submits orders or runs a paper-trading cycle. See `docs/dashboard_setup.md` for details and recommended first-test caps.
 
+### Arena Command Center (Phase 7Q)
+
+The dashboard now opens on the **ExaltedFable Arena** — a polished "Alpha vs Beta AI paper-trading
+competition" command center that answers, at a glance: who's winning this week, what each team is
+doing right now, what changed since the last cycle, the latest agent proposals, paper account value /
+positions, whether the system is safe and paper-only, whether the cheap bot loop is running, which LLM
+models are in use, and what the advisory review agents learned today.
+
+```bash
+python -m src.main dashboard          # or: streamlit run src/ui/dashboard.py
+```
+
+**Layout.** A premium header command bar (paper-only / mode / kill-switch badges), an Alpha vs Beta
+scoreboard with a leader callout, then three columns: **team cards** (equity/cash/buying power, daily
+P&L, positions, latest proposal counts, 7L attribution outcomes, 7M Portfolio Manager decision, 7N
+cheap-cycle-gate result, risk/review approvals, agent roster), a **Team Intelligence Brief** + a
+performance visual, and an **agent feed** of original glowing-orb agent cards plus a **Live Intelligence
+Feed**. Raw tables, runtime paths, strategy memory, daily reviews, and the LLM routing/review config
+live in an Expert-only drawer.
+
+**Modes.** Two selectors in the sidebar (persisted locally under the ignored `data/runtime/arena_ui.json`):
+
+- **Demo Mode** vs **Operator Mode** — Demo is safe for GitHub / interview / presentation: no risky
+  controls, and any missing real data is shown as **clearly-labeled sample data** (never presented as
+  real). Operator Mode shows real local runtime state and operational controls — still paper-only and
+  fully gated.
+- **Simple Mode** vs **Expert Mode** — Simple shows polished cards, the scoreboard, and brief summaries
+  (no raw logs); Expert exposes tables, runtime files, logs, and advanced controls behind expanders.
+
+**Grouped navigation.** The old flat page list is replaced by six groups — **Arena, Agents, Portfolio,
+Research Lab, Operator, Setup & Safety** — defaulting to Arena. Every existing page remains reachable.
+
+**Operator page.** Start/stop the **cheap competition loop** as a background process via the same gated
+CLI (`python -m src.main run-cheap-competition-loop --sleep-seconds 900 --team both
+--llm-review-when-skipped`), run a single **dry-run** loop, refresh attribution, or run the advisory
+**LLM daily review** (submits no orders). PID/log files live under the ignored `data/runtime/`; no
+broker function is ever called from the UI and no secrets touch the command line. The cheap loop is the
+recommended replacement for the old every-15-minute full proposal loop. The **kill switch** is easy to
+find: engaging it also disables all autonomy; disabling it is gated behind Expert Operator Mode with a
+strong warning. **Run Cycle / full trading controls never appear on the Simple Arena view.**
+
+**Safety (unchanged).** The Arena redesign is presentation only — it changes no trading gates. The UI
+never submits broker orders, never displays secrets, and never bypasses deterministic risk, review
+approvals, the Portfolio Manager, autonomy gates, daily caps, the kill switch, team credentials, or the
+paper-only wrapper. LLMs only advise/critique/summarize/propose; the deterministic risk engine remains
+authoritative.
+
 Ask a configured Hermes team for proposal JSON from Discord:
 
 ```text

@@ -139,6 +139,20 @@ from src.ui.ui_templates import (
     template_landing_metadata,
     template_options,
 )
+from src.ui import arena_home
+from src.ui.arena_theme import arena_css, render_arena_footer
+from src.ui.navigation import (
+    ArenaMode,
+    DEFAULT_PAGE_ID,
+    navigation_groups,
+    normalize_audience,
+    normalize_density,
+    read_arena_mode,
+    save_arena_mode,
+    visible_groups,
+    visible_pages,
+)
+from src.ui.operator_controls import render_operator_bot_controls
 
 PAGE_TITLE = "ExaltedFable Agent Trading Lab"
 RUNTIME_BROWSE_DIRS = [
@@ -1592,73 +1606,118 @@ def _render_agent_hub(config: DiscordBotConfig, settings: Settings | None) -> No
 
 
 # ---------------------------------------------------------------------------
+# Operator page (mode-aware; reuses safe process/CLI wrappers only)
+# ---------------------------------------------------------------------------
+def _render_operator(config: DiscordBotConfig, settings: Settings | None, mode: ArenaMode) -> None:
+    st.header("Operator")
+    st.caption("Local process control + advisory actions. Paper-only; no broker calls from the UI.")
+    render_operator_bot_controls(st, is_operator=mode.is_operator, is_expert=mode.is_expert)
+
+    st.divider()
+    st.subheader("Kill switch")
+    state = read_kill_switch_state()
+    if state.engaged:
+        st.error("KILL SWITCH ENGAGED — all new broker submissions are blocked.")
+        if mode.is_operator and mode.is_expert:
+            st.warning(
+                "Disabling the kill switch re-allows the gated paper path to submit orders "
+                "(deterministic risk, approvals, daily caps, and the paper-only wrapper still apply)."
+            )
+            if st.checkbox("I understand — allow disabling the kill switch", key="ks_off_ack"):
+                if st.button("Disable kill switch"):
+                    from src.safety.kill_switch import disengage
+
+                    disengage()
+                    _notify("Kill switch disengaged.", "warning")
+                    st.rerun()
+        else:
+            st.caption("Switch to Expert Operator Mode to disable the kill switch.")
+    else:
+        st.success("Kill switch is OFF. The gated paper path may submit orders if all gates pass.")
+        if st.button("🛑 ENGAGE KILL SWITCH — disable ALL autonomy"):
+            from src.safety.kill_switch import engage
+
+            engage(reason="Arena operator kill switch")
+            disable_all_autonomy(config)
+            _notify("Kill switch ENGAGED. All autonomy disabled.", "success")
+            st.rerun()
+
+
+def read_kill_switch_state():
+    from src.safety.kill_switch import read_kill_switch
+
+    return read_kill_switch()
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+def _render_arena_sidebar(mode: ArenaMode) -> tuple[ArenaMode, str]:
+    """Render mode selectors + grouped navigation. Returns (mode, selected_page_id)."""
+
+    st.sidebar.markdown("### ExaltedFable Arena")
+    audience = st.sidebar.radio(
+        "Mode", ("demo", "operator"),
+        index=("demo", "operator").index(mode.audience),
+        format_func=lambda v: "Demo (presentation-safe)" if v == "demo" else "Operator (live local state)",
+    )
+    density = st.sidebar.radio(
+        "Detail", ("simple", "expert"),
+        index=("simple", "expert").index(mode.density),
+        format_func=lambda v: "Simple" if v == "simple" else "Expert",
+    )
+    audience = normalize_audience(audience)
+    density = normalize_density(density)
+    if audience != mode.audience or density != mode.density:
+        mode = ArenaMode(audience=audience, density=density)
+        save_arena_mode(mode)
+
+    groups = visible_groups(audience=mode.audience, density=mode.density)
+    group_labels = [group.label for group in groups]
+    group_label = st.sidebar.radio("Section", group_labels, index=0)
+    group = next(g for g in groups if g.label == group_label)
+    pages = visible_pages(group, audience=mode.audience, density=mode.density)
+    page_labels = [page.label for page in pages]
+    default_idx = page_labels.index(DEFAULT_PAGE_ID) if DEFAULT_PAGE_ID in page_labels else 0
+    page_label = st.sidebar.radio("Page", page_labels, index=default_idx)
+    page_id = next(p.page_id for p in pages if p.label == page_label)
+    st.sidebar.caption("Local-only · paper-only · no live trading")
+    return mode, page_id
+
+
 def render() -> None:
-    st.set_page_config(page_title=PAGE_TITLE, layout="wide", page_icon="📈")
-    template_id = selected_template_id(DEFAULT_TEMPLATE_CONFIG_PATH)
-    template = UI_TEMPLATES[template_id]
-    _apply_template_style(template_id)
-    st.title(PAGE_TITLE)
-    st.caption(f"ExaltedFable {template.label}")
-    _render_notifications()
-    _safety_banner(compact=template.compact_safety_banner)
+    st.set_page_config(page_title="ExaltedFable Arena", layout="wide", page_icon="🏟️")
+    st.markdown(arena_css(), unsafe_allow_html=True)
 
     config = _load_config()
     settings = _safe_settings()
     statuses = [collect_team_status(team_id, config, settings=settings) for team_id in KNOWN_TEAM_IDS]
 
-    st.sidebar.title(template.label)
-    options = template_options()
-    option_ids = [option.template_id for option in options]
-    selected_label = st.sidebar.selectbox(
-        "UI template",
-        option_ids,
-        index=option_ids.index(template_id),
-        format_func=lambda value: UI_TEMPLATES[value].label,
-    )
-    st.sidebar.caption(UI_TEMPLATES[selected_label].description)
-    if selected_label != template_id:
-        save_template_selection(selected_label, DEFAULT_TEMPLATE_CONFIG_PATH)
-        _notify(f"UI template saved: {UI_TEMPLATES[selected_label].label}", "success")
-    if st.sidebar.button("Reset template"):
-        reset_template_selection(DEFAULT_TEMPLATE_CONFIG_PATH)
-        _notify("UI template reset to Portfolio Cockpit.", "success")
-    pages = [
-        "Home",
-        "Portfolio Cockpit",
-        "Overview",
-        "Weekly Competition",
-        "Alpha vs Beta Scoreboard",
-        "Team Learning",
-        "Research",
-        "Proposal Attribution",
-        "Permissions / Risk Levels",
-        "Advanced Paper Trading",
-        "Kill Switch",
-        "Model Provider Setup",
-        "Daily Lab",
-        "Teams",
-        "Agents",
-        "Agent Hub",
-        "Run Cycle",
-        "Data Tools",
-        "Paper Accounts",
-        "Discord Bot",
-        "Reports",
-        "Runtime Files",
-        "Settings",
-        "Setup Wizard",
-        "Setup / Secrets",
-        "Hermes / Ollama / Local AI",
-        "Help / Safety",
-    ]
-    default_page = template.default_page if template.default_page in pages else pages[0]
-    page = st.sidebar.radio("Navigate", pages, index=pages.index(default_page))
-    st.sidebar.caption("Local-only · paper-only · no live trading")
+    mode = read_arena_mode()
+    mode, page = _render_arena_sidebar(mode)
+
+    _render_notifications()
+
+    if page == "Arena":
+        arena_home.render_arena(st, mode=mode, settings=settings)
+        return
+    if page == "Operator":
+        _render_operator(config, settings, mode)
+        render_arena_footer(st)
+        return
+
+    # Other grouped pages keep their existing renderers under a compact header.
+    st.markdown(f"## {page}")
+    _safety_banner(compact=True)
+    _render_page(page, config, settings, statuses)
+    render_arena_footer(st)
+
+
+def _render_page(page: str, config: DiscordBotConfig, settings: Settings | None, statuses: list[TeamStatus]) -> None:
+    """Route a grouped-navigation page to its existing renderer. No feature is lost."""
 
     if page == "Home":
-        _render_template_home(template_id, config, settings, statuses)
+        _render_template_home(selected_template_id(DEFAULT_TEMPLATE_CONFIG_PATH), config, settings, statuses)
     elif page == "Portfolio Cockpit":
         _render_portfolio_cockpit(config, settings, statuses)
     elif page == "Overview":

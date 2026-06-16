@@ -141,6 +141,31 @@ execution. The deterministic risk engine and PortfolioManager remain authoritati
   never runs the strategy model or submits orders. `run-week-cycle` prints a compact team debate when the
   critique/review agents are enabled.
 
+Phase 7Q — Arena Command Center UI redesign. The Streamlit dashboard now opens on the **ExaltedFable
+Arena**, a polished Alpha vs Beta AI paper-trading command center. A header command bar (paper-only /
+mode / kill-switch badges), an Alpha vs Beta scoreboard with a leader callout, and a three-column layout
+(team cards · intelligence brief + performance visual · agent orbs + live intelligence feed) answer at a
+glance: who is winning, what each team is doing now, what changed, the latest proposals, paper account
+status, whether the system is safe/paper-only, whether the cheap bot loop is running, which LLM models
+are used, and what the advisory review agents learned today.
+
+- New mostly-pure UI modules (`navigation`, `arena_data`, `arena_components`, `arena_theme`,
+  `operator_controls`, `arena_home`) keep `dashboard.py` thin and unit-testable without launching a
+  browser. Grouped navigation (Arena / Agents / Portfolio / Research Lab / Operator / Setup & Safety)
+  replaces the flat page list and defaults to Arena; every legacy page stays reachable.
+- Two persisted local modes (ignored `data/runtime/arena_ui.json`): **Demo** (presentation-safe; missing
+  real data shown as clearly-labeled sample data, never claimed real) vs **Operator** (real local state +
+  controls), and **Simple** (cards/summaries, no raw logs) vs **Expert** (tables, runtime files, logs).
+- Surfaces 7L attribution outcomes, the 7M PortfolioManager decision, the 7N cheap-cycle gate + daily
+  review, 7O model routing, and 7P advisory review / team debate / strategy memory — all read-only.
+- The Operator page starts/stops the cheap competition loop as a background process and runs dry-run /
+  refresh / advisory LLM daily review through the **same gated CLI** (no broker calls from the UI, no
+  secrets on the command line, PID/log under ignored `data/runtime/`). The kill switch is easy to find
+  (engage also disables all autonomy); disabling it is gated behind Expert Operator Mode.
+- The redesign changes **no** trading gate: the UI never submits orders, never displays secrets, and
+  never bypasses deterministic risk, review approvals, the Portfolio Manager, autonomy gates, daily caps,
+  the kill switch, team credentials, or the paper-only wrapper. Deterministic risk remains authoritative.
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 

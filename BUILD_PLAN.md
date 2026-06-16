@@ -1273,3 +1273,36 @@ Delivered:
 Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no web/search,
 no weakening of hard risk caps, no real OpenAI calls in tests. Review agents advise only — they never
 control execution.
+
+## Phase 7Q - Arena Command Center UI Redesign
+
+Goal: redesign the Streamlit UI into a polished "ExaltedFable Arena" Alpha vs Beta command center and
+surface the 7L–7P competition/learning/cost-control features through the UI — without changing any
+trading safety guarantee.
+
+Delivered:
+
+- New UI modules (mostly pure + Streamlit-free for testability): `src/ui/navigation.py` (grouped nav +
+  persisted Demo/Operator and Simple/Expert modes), `src/ui/arena_data.py` (per-team Arena snapshot,
+  scoreboard leader, intelligence feed/brief, demo snapshot, cheap-gate eval, attribution summary, LLM
+  status cards), `src/ui/arena_components.py` (status pill, metric/team cards, scoreboard, agent orb,
+  feed, `safe_truncate_text`, kill-switch badge — pure HTML builders + thin `render_*`),
+  `src/ui/arena_theme.py` (scoped CSS + premium header/footer — original CSS only, no external CDN),
+  `src/ui/operator_controls.py` (cheap-loop start/stop/dry-run + advisory CLI runners reusing
+  `process_control` primitives), and `src/ui/arena_home.py` (three-column Arena page + Expert drawer).
+- `dashboard.py` now defaults to the Arena, applies the Arena theme, replaces the flat page list with the
+  six grouped sections (Arena / Agents / Portfolio / Research Lab / Operator / Setup & Safety), adds the
+  mode selectors, and routes every legacy page through `_render_page` so nothing is lost. New Operator
+  page exposes the cheap-loop controls + a mode-aware kill switch (engage easy; disable gated behind
+  Expert Operator Mode).
+- Surfaces 7L attribution outcomes, 7M PortfolioManager decision, 7N cheap-cycle gate + daily review,
+  7O model routing, and 7P advisory review/team-debate/strategy-memory — all read-only.
+- Demo Mode shows clearly-labeled sample data (never claimed real); Simple Mode hides raw logs; Expert
+  Mode exposes raw expanders. Operator Mode preserves all gates.
+- Docs: README Arena section + `docs/dashboard_setup.md` Arena guide. Tests: `tests/test_phase7q_arena.py`
+  (navigation, modes, truncation, scoreboard leader, team card/attribution/PM rendering, kill-switch
+  badge, LLM-status secret-hiding, demo labeling, operator start/stop/dry-run wrappers).
+
+Non-goals (unchanged): no live trading, no new broker execution path, no secrets displayed, no external
+web scraping/CDN, no copyrighted assets, no weakening of any safety gate. The UI calls existing safe
+CLI/helpers only; the deterministic risk engine remains authoritative.

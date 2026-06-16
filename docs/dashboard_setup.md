@@ -238,3 +238,77 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows_launcher.ps1
 
 Generated `dist/`, `build/`, and `*.spec` files are ignored. The launcher only starts
 Streamlit; it is not the trading engine and does not contain secrets.
+
+## Arena Command Center (Phase 7Q)
+
+The dashboard opens on the **ExaltedFable Arena** — a polished Alpha vs Beta AI paper-trading
+command center. Launch it the same way:
+
+```bash
+python -m src.main dashboard
+# or
+streamlit run src/ui/dashboard.py
+```
+
+### What the first screen shows
+
+A header command bar (paper-only / mode / kill-switch badges), an Alpha vs Beta scoreboard with a
+leader callout, then three columns:
+
+- **Team cards** — equity, cash, buying power, daily P&L (or `n/a`), position count, latest proposal
+  counts (execution-eligible / simulation-only / rejected / broker-rejected), 7L attribution outcomes
+  (worked / failed / mixed / pending), the 7M Portfolio Manager decision (decision type, no-trade,
+  max-new-proposals), the 7N cheap-cycle-gate result, risk/review approval state, and the agent roster.
+- **Center** — a Team Intelligence Brief (news-style, built only from local state) and a performance
+  visual.
+- **Right** — original glowing-orb agent cards (Research / Risk / Review / Portfolio Manager / LLM
+  Review) and a Live Intelligence Feed (5–10 short items, long text truncated, raw logs behind
+  expanders).
+
+### Demo Mode vs Operator Mode
+
+Selected in the sidebar and persisted locally under the ignored `data/runtime/arena_ui.json`:
+
+- **Demo Mode** is safe for GitHub / interview / job-presentation use. It hides risky controls and, when
+  real data is missing, shows **clearly-labeled sample data** (`DEMO / SAMPLE DATA — not real`). It never
+  presents demo data as real.
+- **Operator Mode** shows real local runtime state and operational controls. It is still paper-only and
+  every safety gate remains in force.
+
+### Simple Mode vs Expert Mode
+
+- **Simple Mode** — polished cards, scoreboard, brief summaries; no raw logs.
+- **Expert Mode** — tables, runtime file paths, logs, strategy memory, daily reviews, and the LLM
+  routing/review config, all behind expanders.
+
+### Grouped navigation
+
+Six groups replace the old flat list — **Arena, Agents, Portfolio, Research Lab, Operator,
+Setup & Safety** — defaulting to Arena. Every legacy page is still reachable through a group.
+
+### Bot start/stop from the UI (Operator page)
+
+The Operator page can start/stop the **cheap competition loop** as a background process, run a single
+dry-run iteration, refresh attribution, and run the advisory LLM daily review (which submits no orders):
+
+```bash
+# What the "Start cheap loop" button runs (the recommended all-day runner):
+python -m src.main run-cheap-competition-loop --sleep-seconds 900 --team both --llm-review-when-skipped
+
+# What the "Dry-run one loop" button runs (prints intentions; no orders):
+python -m src.main run-cheap-competition-loop --once --dry-run-loop --llm-review-when-skipped
+```
+
+PID/log files live under the ignored `data/runtime/` (`cheap_loop.pid`, `cheap_loop.log`); no secrets
+are placed on the command line and no broker function is ever called from the UI. The cheap loop is the
+recommended replacement for the old every-15-minute full proposal loop.
+
+The **kill switch** is easy to find on the Operator page: engaging it also disables all autonomy.
+Disabling it is gated behind Expert Operator Mode with a strong warning and preserves all other gates.
+
+### Safety note
+
+The Arena redesign is a presentation change only. It does **not** change any paper-only gate: the UI
+never submits broker orders, never displays secrets, and never bypasses deterministic risk, review
+approvals, the Portfolio Manager, autonomy gates, daily caps, the kill switch, team credentials, or the
+paper-only wrapper. The deterministic risk engine remains authoritative.
