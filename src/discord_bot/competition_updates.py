@@ -73,6 +73,13 @@ _ACTION_LABELS = {
 
 _TEAM_DISPLAY = {"team_alpha": "Team Alpha", "team_beta": "Team Beta"}
 
+# --- brief-mode compaction targets ------------------------------------------
+# Brief mode aims for ~900-1300 chars total (always under ``max_chars``). Each
+# section is capped to a single short sentence or one compact bullet.
+BRIEF_SECTION_MAX_CHARS = 180
+BRIEF_LIST_MAX_ITEMS = 2
+_MIXED_SIGNALS_WARNING = "Memory has mixed signals; reconcile before next full cycle."
+
 
 def _bool_env(env: Mapping[str, str], name: str, default: bool) -> bool:
     raw = _clean_optional(env.get(name))
@@ -335,6 +342,91 @@ def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
         return default
 
 
+# --- brief-mode compaction helpers ------------------------------------------
+
+
+def compact_sentence(text: Any, max_chars: int = BRIEF_SECTION_MAX_CHARS) -> str:
+    """Collapse ``text`` to a single short sentence no longer than ``max_chars``.
+
+    Whitespace/newlines are collapsed, only the first sentence is kept, and the
+    result is hard-capped so a long memory paragraph can never blow up a brief.
+    """
+
+    if text is None:
+        return _NA
+    collapsed = " ".join(str(text).split())
+    if not collapsed:
+        return _NA
+    max_chars = max(1, int(max_chars))
+    first = re.split(r"(?<=[.!?])\s+", collapsed, maxsplit=1)[0]
+    if len(first) > max_chars:
+        keep = max(1, max_chars - 3)
+        first = first[:keep].rstrip() + "..."
+    return first
+
+
+def compact_list(values: Any, max_items: int = BRIEF_LIST_MAX_ITEMS, fallback: str = _NA) -> str:
+    """Join up to ``max_items`` cleaned values into one compact bullet.
+
+    Extra items collapse to a ``(+N)`` suffix instead of a long paragraph.
+    """
+
+    if not values:
+        return fallback
+    cleaned = [str(item).strip() for item in values if str(item).strip()]
+    if not cleaned:
+        return fallback
+    max_items = max(1, int(max_items))
+    head = cleaned[:max_items]
+    extra = len(cleaned) - len(head)
+    out = ", ".join(head)
+    if extra > 0:
+        out += f" (+{extra})"
+    return out
+
+
+def _memory_attr(memory: Any, name: str) -> Any:
+    """Read ``name`` from a StrategyMemory object or a memory-like mapping/dict."""
+
+    if memory is None:
+        return None
+    if isinstance(memory, Mapping):
+        return memory.get(name)
+    return getattr(memory, name, None)
+
+
+def summarize_memory_for_discord(memory: Any, max_chars: int = BRIEF_SECTION_MAX_CHARS) -> str:
+    """Compact a strategy-memory artifact to one safe sentence for Discord.
+
+    Detects contradictions first: if any symbol (or sector) appears in both the
+    favor and avoid lists, the memory is self-contradictory and we surface only a
+    concise reconcile warning instead of dumping conflicting paragraphs. Otherwise
+    we prefer the precomputed ``compact_summary``, falling back to recurring
+    winning patterns, always capped to ``max_chars``.
+    """
+
+    if memory is None:
+        return _NA
+
+    def _norm(values: Any) -> set[str]:
+        return {str(v).strip().lower() for v in (values or []) if str(v).strip()}
+
+    favor = _norm(_memory_attr(memory, "symbols_to_favor"))
+    avoid = _norm(_memory_attr(memory, "symbols_to_avoid"))
+    sectors_favor = _norm(_memory_attr(memory, "sectors_to_favor"))
+    sectors_avoid = _norm(_memory_attr(memory, "sectors_to_avoid"))
+    if (favor & avoid) or (sectors_favor & sectors_avoid):
+        return _MIXED_SIGNALS_WARNING
+
+    summary = _memory_attr(memory, "compact_summary")
+    if summary:
+        return compact_sentence(summary, max_chars)
+    winners = _memory_attr(memory, "recurring_winning_patterns")
+    if winners:
+        return compact_sentence(compact_list(winners, BRIEF_LIST_MAX_ITEMS, fallback=_NA), max_chars)
+    return _NA
+
+
 def gather_team_iteration_context(
     team_id: str,
     *,
@@ -423,6 +515,13 @@ def gather_team_iteration_context(
         ctx["recurring_winners"] = list(getattr(memory, "recurring_winning_patterns", []) or [])
         ctx["recurring_losers"] = list(getattr(memory, "recurring_losing_patterns", []) or [])
         ctx["compact_summary"] = getattr(memory, "compact_summary", None) or None
+        ctx["symbols_to_favor"] = list(getattr(memory, "symbols_to_favor", []) or [])
+        ctx["symbols_to_avoid"] = list(getattr(memory, "symbols_to_avoid", []) or [])
+        ctx["sectors_to_favor"] = list(getattr(memory, "sectors_to_favor", []) or [])
+        ctx["sectors_to_avoid"] = list(getattr(memory, "sectors_to_avoid", []) or [])
+        # Precompute a compact, contradiction-aware one-liner so the brief never
+        # has to dump a raw memory paragraph.
+        ctx["memory_summary"] = summarize_memory_for_discord(memory, max_chars=BRIEF_SECTION_MAX_CHARS)
         if not ctx.get("mode"):
             ctx["mode"] = getattr(memory, "recommended_mode", None) or None
 
@@ -453,10 +552,43 @@ def _team_display(team_id: str) -> str:
     return _TEAM_DISPLAY.get(team_id, team_id)
 
 
-def build_team_iteration_update(team_id: str, iteration_context: Mapping[str, Any]) -> str:
-    """Build a compact "team room briefing" from a gathered context dict."""
+def _what_changed_line(ctx: Mapping[str, Any], *, brief: bool) -> str:
+    """Compact, contradiction-aware "what changed" value for the brief.
+
+    Builds a memory-like view from the gathered context so a symbol appearing in
+    both favor and avoid collapses to the reconcile warning, never a paragraph.
+    """
+
+    mem_view = {
+        "symbols_to_favor": ctx.get("symbols_to_favor"),
+        "symbols_to_avoid": ctx.get("symbols_to_avoid"),
+        "sectors_to_favor": ctx.get("sectors_to_favor"),
+        "sectors_to_avoid": ctx.get("sectors_to_avoid"),
+        "compact_summary": ctx.get("memory_summary") or ctx.get("compact_summary"),
+        "recurring_winning_patterns": ctx.get("recurring_winners"),
+    }
+    summary = summarize_memory_for_discord(mem_view, max_chars=BRIEF_SECTION_MAX_CHARS)
+    if summary == _NA and ctx.get("keep_doing"):
+        fallback = compact_list(ctx.get("keep_doing"), BRIEF_LIST_MAX_ITEMS)
+        return compact_sentence(fallback, BRIEF_SECTION_MAX_CHARS) if brief else fallback
+    return summary
+
+
+def build_team_iteration_update(
+    team_id: str,
+    iteration_context: Mapping[str, Any],
+    *,
+    style: str = "brief",
+) -> str:
+    """Build a compact "team room briefing" from a gathered context dict.
+
+    In ``style="brief"`` (the default) every section is capped to one short
+    sentence or one compact bullet — large raw memory paragraphs are summarized
+    away so the message lands well under ``DISCORD_ITERATION_UPDATE_MAX_CHARS``.
+    """
 
     ctx = dict(iteration_context or {})
+    brief = str(style or "brief").lower() == "brief"
     iteration = ctx.get("iteration")
     header = f"{_team_display(team_id)} - Iteration Brief"
     if iteration is not None:
@@ -470,11 +602,30 @@ def build_team_iteration_update(team_id: str, iteration_context: Mapping[str, An
         f"top winner {ctx['strongest_symbol']}" if ctx.get("strongest_symbol") else None
     )
 
+    if brief:
+        why = compact_sentence(ctx.get("gate_reason"), BRIEF_SECTION_MAX_CHARS)
+        why_vs_spy = compact_sentence(ctx.get("why_vs_spy"), BRIEF_SECTION_MAX_CHARS)
+        strongest_line = compact_sentence(strongest, BRIEF_SECTION_MAX_CHARS)
+        what_changed = _what_changed_line(ctx, brief=True)
+        watching = compact_list((ctx.get("test_next") or []) + (ctx.get("watchlist") or []), BRIEF_LIST_MAX_ITEMS)
+        worked_detail = compact_list(ctx.get("keep_doing"), BRIEF_LIST_MAX_ITEMS, fallback="") if ctx.get("keep_doing") else ""
+        failed_detail = compact_list(ctx.get("stop_doing"), BRIEF_LIST_MAX_ITEMS, fallback="") if ctx.get("stop_doing") else ""
+        avoid_next = compact_list(ctx.get("avoid_next_cycle"), BRIEF_LIST_MAX_ITEMS)
+    else:
+        why = ctx.get("gate_reason") or _NA
+        why_vs_spy = ctx.get("why_vs_spy") or _NA
+        strongest_line = strongest or _NA
+        what_changed = _what_changed_line(ctx, brief=False)
+        watching = _join((ctx.get("test_next") or []) + (ctx.get("watchlist") or []))
+        worked_detail = _join(ctx.get("keep_doing")) if ctx.get("keep_doing") else ""
+        failed_detail = _join(ctx.get("stop_doing")) if ctx.get("stop_doing") else ""
+        avoid_next = _join(ctx.get("avoid_next_cycle"))
+
     lines = [
         header,
         f"Mode: {ctx.get('mode') or _NA}",
         f"Cycle decision: {_ACTION_LABELS.get(action, action)}",
-        f"Why: {ctx.get('gate_reason') or _NA}",
+        f"Why: {why}",
         f"Portfolio Manager: {ctx.get('pm_decision') or _NA} "
         f"(no_trade={ctx.get('pm_no_trade')}, max_new={ctx.get('pm_max_new')})",
         f"Market: {market} | Kill switch: {ks}",
@@ -482,11 +633,11 @@ def build_team_iteration_update(team_id: str, iteration_context: Mapping[str, An
         "Current thinking:",
         f"- vs SPY: {ctx.get('spy_relative_result') or _pct(ctx.get('excess_return'))} "
         f"(team {_pct(ctx.get('team_return'))} vs SPY {_pct(ctx.get('spy_return'))})",
-        f"- Why vs SPY: {ctx.get('why_vs_spy') or _NA}",
-        f"- Strongest thesis: {strongest or _NA}",
+        f"- Why vs SPY: {why_vs_spy}",
+        f"- Strongest thesis: {strongest_line}",
         f"- Weakest holding: {ctx.get('weakest_symbol') or _NA}",
-        f"- What changed: {ctx.get('compact_summary') or _join(ctx.get('keep_doing'))}",
-        f"- Watching next: {_join((ctx.get('test_next') or []) + (ctx.get('watchlist') or []))}",
+        f"- What changed: {what_changed}",
+        f"- Watching next: {watching}",
         "",
         "Actions:",
         f"- Proposals: {ctx.get('proposals_count') if ctx.get('proposals_count') is not None else _NA} "
@@ -499,11 +650,11 @@ def build_team_iteration_update(team_id: str, iteration_context: Mapping[str, An
         "",
         "Learning:",
         f"- Worked: {ctx.get('worked_count') if ctx.get('worked_count') is not None else _NA}"
-        + (f" ({_join(ctx.get('keep_doing'))})" if ctx.get("keep_doing") else ""),
+        + (f" ({worked_detail})" if worked_detail else ""),
         f"- Failed: {ctx.get('failed_count') if ctx.get('failed_count') is not None else _NA}"
-        + (f" ({_join(ctx.get('stop_doing'))})" if ctx.get("stop_doing") else ""),
+        + (f" ({failed_detail})" if failed_detail else ""),
         f"- Mixed: {ctx.get('mixed_count') if ctx.get('mixed_count') is not None else _NA}",
-        f"- Avoid next cycle: {_join(ctx.get('avoid_next_cycle'))}",
+        f"- Avoid next cycle: {avoid_next}",
         "",
         f"Model: {ctx.get('llm_model_used') or _NA}",
         "Safety: Paper-only. LLMs do not execute trades. Orders require deterministic gates.",
@@ -691,7 +842,7 @@ def post_team_iteration_update(
             kill_switch_engaged=kill_switch_engaged,
             llm_model_used=llm_model_used,
         )
-        message = build_team_iteration_update(team_id, ctx)
+        message = build_team_iteration_update(team_id, ctx, style=config.style)
         would = "would post" if should else f"would NOT post ({reason})"
         print(f"[dry-run] {would} Discord iteration update to {team_id}:")
         print(redact_secrets(truncate_discord_message(message, config.max_chars)))
@@ -709,7 +860,7 @@ def post_team_iteration_update(
         kill_switch_engaged=kill_switch_engaged,
         llm_model_used=llm_model_used,
     )
-    message = build_team_iteration_update(team_id, ctx)
+    message = build_team_iteration_update(team_id, ctx, style=config.style)
 
     if not min_interval_ok(team_id, config, state_path=state_path, now=now):
         return {
@@ -723,6 +874,54 @@ def post_team_iteration_update(
     )
 
 
+def _summary_dedup_key(config: DiscordIterationUpdateConfig) -> str:
+    """State key identifying a summary post by its target channel name."""
+
+    return f"summary:{config.competition_summary_channel}"
+
+
+def summary_already_posted_this_iteration(
+    config: DiscordIterationUpdateConfig,
+    iteration: int | None,
+    *,
+    state_path: Path | str | None = None,
+) -> bool:
+    """True when the scoreboard for this channel was already posted this iteration.
+
+    The de-dup marker is ``(loop iteration number, summary channel)``; within a
+    loop process the iteration number increases monotonically, so this lets the
+    scoreboard post at most once per iteration even if the post path is reached
+    more than once. ``iteration is None`` disables the guard (one-shot CLI use).
+    """
+
+    if iteration is None:
+        return False
+    state = load_update_state(state_path)
+    entry = state.get(_summary_dedup_key(config))
+    if not isinstance(entry, dict):
+        return False
+    return entry.get("last_summary_iteration") == iteration
+
+
+def _mark_summary_posted_for_iteration(
+    config: DiscordIterationUpdateConfig,
+    iteration: int | None,
+    *,
+    state_path: Path | str | None = None,
+    now: datetime | None = None,
+) -> None:
+    if iteration is None:
+        return
+    now = now or datetime.now(timezone.utc)
+    key = _summary_dedup_key(config)
+    state = load_update_state(state_path)
+    entry = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+    entry["last_summary_iteration"] = iteration
+    entry["last_summary_iteration_at"] = now.isoformat()
+    state[key] = entry
+    _write_state(state, state_path)
+
+
 def post_competition_iteration_summary(
     *,
     config: DiscordIterationUpdateConfig | None = None,
@@ -731,10 +930,16 @@ def post_competition_iteration_summary(
     kill_switch_engaged: bool = False,
     next_wake_seconds: int | None = None,
     teams: tuple[str, ...] = ("team_alpha", "team_beta"),
+    iteration: int | None = None,
     state_path: Path | str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build + (unless dry-run) post the Alpha-vs-Beta scoreboard summary."""
+    """Build + (unless dry-run) post the Alpha-vs-Beta scoreboard summary.
+
+    Posts at most once per loop ``iteration`` per channel: pass the loop's
+    iteration number and the summary will skip safely if it was already posted
+    this iteration (prevents duplicate scoreboards within one cheap-loop cycle).
+    """
 
     config = config or DiscordIterationUpdateConfig.from_env()
     enabled = config.enabled and config.post_competition_summary
@@ -750,9 +955,19 @@ def post_competition_iteration_summary(
     if not enabled:
         return {"sent": False, "reason": "competition summary disabled", "message": None}
 
-    return send_competition_iteration_summary(
+    if summary_already_posted_this_iteration(config, iteration, state_path=state_path):
+        return {
+            "sent": False,
+            "reason": f"summary already posted this iteration ({iteration})",
+            "message": message,
+        }
+
+    result = send_competition_iteration_summary(
         message, config=config, sender=sender, state_path=state_path, now=now
     )
+    if result.get("sent"):
+        _mark_summary_posted_for_iteration(config, iteration, state_path=state_path, now=now)
+    return result
 
 
 # --- UI / status ------------------------------------------------------------
@@ -800,6 +1015,8 @@ __all__ = [
     "DiscordIterationUpdateConfig",
     "build_competition_iteration_summary",
     "build_team_iteration_update",
+    "compact_list",
+    "compact_sentence",
     "gather_team_iteration_context",
     "iteration_updates_status",
     "min_interval_ok",
@@ -809,5 +1026,7 @@ __all__ = [
     "send_competition_iteration_summary",
     "send_team_iteration_update",
     "should_post_for_action",
+    "summarize_memory_for_discord",
+    "summary_already_posted_this_iteration",
     "truncate_discord_message",
 ]

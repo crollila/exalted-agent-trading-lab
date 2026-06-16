@@ -929,14 +929,23 @@ def run_cheap_competition_loop(
         else:
             run_export_team_scorecards()
 
-        # Phase 7S: optional Alpha-vs-Beta scoreboard summary to the summary channel.
-        _post_discord_competition_summary(
-            config=discord_update_config,
-            kill_switch_engaged=ks.engaged,
-            next_wake_seconds=None if once else sleep_seconds,
-            teams=tuple(teams),
-            dry_run=dry_run_loop,
-        )
+        # Phase 7S.2: post the Alpha-vs-Beta scoreboard exactly once per iteration,
+        # after both teams are processed, and only when both teams ran this loop (a
+        # single-team loop has no head-to-head, so it never posts a scoreboard).
+        if len(teams) >= 2:
+            _post_discord_competition_summary(
+                config=discord_update_config,
+                iteration=iteration,
+                kill_switch_engaged=ks.engaged,
+                next_wake_seconds=None if once else sleep_seconds,
+                teams=tuple(teams),
+                dry_run=dry_run_loop,
+            )
+        elif discord_update_config is not None and getattr(discord_update_config, "enabled", False):
+            print(
+                f"[summary] skipped: single-team loop ({teams[0]}); "
+                "Alpha-vs-Beta scoreboard needs both teams."
+            )
 
         if once:
             break
@@ -1007,12 +1016,17 @@ def _post_discord_iteration_update(
 def _post_discord_competition_summary(
     *,
     config,
+    iteration: int | None = None,
     kill_switch_engaged: bool,
     next_wake_seconds: int | None,
     teams: tuple[str, ...],
     dry_run: bool,
 ) -> None:
-    """Post the optional Alpha-vs-Beta scoreboard summary. Never crashes the loop."""
+    """Post the optional Alpha-vs-Beta scoreboard summary. Never crashes the loop.
+
+    Posts at most once per loop ``iteration`` (the summary's own de-dup guard
+    skips a repeat in the same iteration), so a scoreboard is never spammed.
+    """
 
     if config is None or not getattr(config, "enabled", False):
         return
@@ -1021,6 +1035,7 @@ def _post_discord_competition_summary(
 
         post_competition_iteration_summary(
             config=config,
+            iteration=iteration,
             kill_switch_engaged=kill_switch_engaged,
             next_wake_seconds=next_wake_seconds,
             teams=teams,

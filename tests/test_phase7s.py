@@ -19,12 +19,15 @@ from src.discord_bot.competition_updates import (
     DiscordIterationUpdateConfig,
     build_competition_iteration_summary,
     build_team_iteration_update,
+    compact_list,
+    compact_sentence,
     gather_team_iteration_context,
     iteration_updates_status,
     post_competition_iteration_summary,
     post_team_iteration_update,
     redact_secrets,
     should_post_for_action,
+    summarize_memory_for_discord,
     truncate_discord_message,
 )
 
@@ -172,6 +175,122 @@ def test_summary_safe_when_no_scorecards(monkeypatch):
     monkeypatch.setattr("src.competition.scorecard.load_latest_scorecard", lambda team_id: None)
     msg = build_competition_iteration_summary()
     assert "Leader: n/a" in msg
+
+
+# --- brief-mode compaction (Phase 7S follow-up) -----------------------------
+
+_HUGE_MEMORY_PARAGRAPH = (
+    "The team rotated heavily out of energy and into megacap technology after a "
+    "string of disappointing oil prints, then re-added a small short hedge against "
+    "regional banks, then reconsidered because the hedge bled carry, and meanwhile "
+    "the portfolio manager flagged that gross exposure had crept above target so "
+    "several discretionary buys were deferred to the following session entirely. "
+) * 4
+
+
+def _brief_cfg(**overrides: str):
+    return DiscordIterationUpdateConfig.from_env(_env(DISCORD_ITERATION_UPDATE_STYLE="brief", **overrides))
+
+
+def test_compact_sentence_caps_and_collapses_whitespace():
+    out = compact_sentence("first sentence here. second sentence ignored.", 180)
+    assert out == "first sentence here."
+    long = compact_sentence("word " * 200, 180)
+    assert len(long) <= 180
+    assert "\n" not in compact_sentence("line one\nline two\nline three", 180)
+    assert compact_sentence("", 180) == "n/a"
+    assert compact_sentence(None, 180) == "n/a"
+
+
+def test_compact_list_caps_items_with_overflow_suffix():
+    assert compact_list(["NVDA", "META", "AAPL", "AMZN"], 2) == "NVDA, META (+2)"
+    assert compact_list([], 2, fallback="n/a") == "n/a"
+    assert compact_list(["   "], 2, fallback="none") == "none"
+
+
+def test_summarize_memory_flags_contradictions():
+    class _Mem:
+        symbols_to_favor = ["NVDA", "META"]
+        symbols_to_avoid = ["META", "TSLA"]
+        sectors_to_favor: list = []
+        sectors_to_avoid: list = []
+        compact_summary = _HUGE_MEMORY_PARAGRAPH
+        recurring_winning_patterns: list = []
+
+    out = summarize_memory_for_discord(_Mem(), 180)
+    assert out == "Memory has mixed signals; reconcile before next full cycle."
+    assert _HUGE_MEMORY_PARAGRAPH not in out
+
+
+def test_summarize_memory_compacts_long_summary():
+    mem = {"compact_summary": _HUGE_MEMORY_PARAGRAPH, "symbols_to_favor": [], "symbols_to_avoid": []}
+    out = summarize_memory_for_discord(mem, 180)
+    assert len(out) <= 180
+    assert _HUGE_MEMORY_PARAGRAPH not in out
+
+
+def test_brief_mode_does_not_dump_raw_memory_paragraph():
+    ctx = _full_ctx("team_alpha")
+    ctx["compact_summary"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["memory_summary"] = _HUGE_MEMORY_PARAGRAPH  # simulate an unsummarized artifact
+    msg = build_team_iteration_update("team_alpha", ctx, style="brief")
+    assert _HUGE_MEMORY_PARAGRAPH not in msg
+    # The "What changed" line stays one compact, capped bullet.
+    what_changed = next(line for line in msg.splitlines() if line.startswith("- What changed:"))
+    assert len(what_changed) <= len("- What changed: ") + 180
+
+
+def test_brief_mode_compacts_long_what_changed_and_why():
+    ctx = _full_ctx("team_alpha")
+    ctx["gate_reason"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["why_vs_spy"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["hypothesis"] = _HUGE_MEMORY_PARAGRAPH
+    msg = build_team_iteration_update("team_alpha", ctx, style="brief")
+    assert _HUGE_MEMORY_PARAGRAPH not in msg
+    for prefix in ("Why:", "- Why vs SPY:", "- Strongest thesis:"):
+        line = next(line for line in msg.splitlines() if line.startswith(prefix))
+        assert len(line) <= len(prefix) + 1 + 180
+
+
+def test_brief_mode_contradictory_memory_becomes_warning():
+    ctx = _full_ctx("team_alpha")
+    ctx["symbols_to_favor"] = ["NVDA", "META"]
+    ctx["symbols_to_avoid"] = ["META"]
+    ctx["compact_summary"] = _HUGE_MEMORY_PARAGRAPH
+    msg = build_team_iteration_update("team_alpha", ctx, style="brief")
+    assert "- What changed: Memory has mixed signals; reconcile before next full cycle." in msg
+    assert _HUGE_MEMORY_PARAGRAPH not in msg
+
+
+def test_brief_mode_message_stays_under_max_chars():
+    ctx = _full_ctx("team_alpha")
+    # Stuff every free-text and list field with oversized content.
+    ctx["gate_reason"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["why_vs_spy"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["hypothesis"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["compact_summary"] = _HUGE_MEMORY_PARAGRAPH
+    ctx["keep_doing"] = [f"keep doing thing number {i}" for i in range(50)]
+    ctx["stop_doing"] = [f"stop doing thing number {i}" for i in range(50)]
+    ctx["watchlist"] = [f"SYM{i}" for i in range(50)]
+    ctx["test_next"] = [f"test {i}" for i in range(50)]
+    ctx["avoid_next_cycle"] = [f"avoid pattern {i}" for i in range(50)]
+    msg = build_team_iteration_update("team_alpha", ctx, style="brief")
+    cfg = _brief_cfg()
+    # Even with every free-text/list field maxed out, the brief stays under the
+    # hard cap (no truncation needed) because each section is independently capped.
+    assert len(msg) <= cfg.max_chars
+    # Realistic content lands in the compact target band (~900-1300 chars).
+    realistic = build_team_iteration_update("team_alpha", _full_ctx("team_alpha"), style="brief")
+    assert len(realistic) <= 1300
+
+
+def test_brief_mode_no_secrets_in_built_message():
+    ctx = _full_ctx("team_alpha")
+    ctx["gate_reason"] = f"interval elapsed; token={SECRET_TOKEN}"
+    ctx["why_vs_spy"] = f"key leaked {SECRET_KEY}"
+    msg = redact_secrets(build_team_iteration_update("team_alpha", ctx, style="brief"))
+    assert SECRET_TOKEN not in msg
+    assert SECRET_KEY not in msg
 
 
 # --- truncation + redaction -------------------------------------------------
@@ -347,6 +466,139 @@ def test_dry_run_cli_prints_message_and_does_not_send(monkeypatch, capsys):
     assert "Iteration Brief" in out
     assert sent == []  # dry-run never calls the real sender
     assert SECRET_TOKEN not in out  # no secrets printed
+
+
+# --- Phase 7S.2: scoreboard posts at most once per loop iteration -----------
+
+
+def _stub_loop_heavy(monkeypatch):
+    """Stub the loop's heavy/real steps so only the Discord wiring exercises."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(main, "read_kill_switch", lambda: SimpleNamespace(engaged=False, describe=lambda: ""))
+    monkeypatch.setattr(main, "run_refresh_proposal_attribution", lambda *a, **k: None)
+    monkeypatch.setattr(main, "run_week_competition_status", lambda *a, **k: None)
+    monkeypatch.setattr(main, "run_export_team_scorecards", lambda *a, **k: None)
+    monkeypatch.setattr(main, "run_week_cycle_cli", lambda *a, **k: None)
+    monkeypatch.setattr(main, "routing_status", lambda *a, **k: {})
+
+    def _gate(tid):
+        return (
+            GateDecision(
+                team_id=tid,
+                should_run_full_cycle=True,
+                reason="full cycle",
+                recommend_review_only=False,
+                trigger_flags=["mode:exploration"],
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(main, "_evaluate_team_cheap_gate", _gate)
+
+
+def _record_http_sends(monkeypatch, tmp_path):
+    """Redirect dedup state to tmp and record every (channel_id, message) send."""
+    import src.discord_bot.competition_updates as cu
+
+    monkeypatch.setattr(cu, "DEFAULT_STATE_PATH", tmp_path / "state.json")
+    calls: list[tuple[int, str]] = []
+    monkeypatch.setattr(cu, "_http_send", lambda channel_id, message, token: calls.append((channel_id, message)))
+    return calls
+
+
+def _set_loop_env(monkeypatch, **overrides):
+    for key, value in _env(**overrides).items():
+        monkeypatch.setenv(key, value)
+
+
+def test_loop_both_posts_two_team_updates_and_one_summary(monkeypatch, tmp_path):
+    _set_loop_env(monkeypatch)
+    _stub_loop_heavy(monkeypatch)
+    calls = _record_http_sends(monkeypatch, tmp_path)
+
+    main.run_cheap_competition_loop(once=True, team="both", market_hours_only=False, dry_run_loop=False)
+
+    channels = [c for c, _ in calls]
+    assert channels.count(111) == 1  # team_alpha brief
+    assert channels.count(222) == 1  # team_beta brief
+    assert channels.count(333) == 1  # scoreboard summary exactly once
+    assert len(calls) == 3
+
+
+def test_loop_summary_not_posted_inside_team_loop(monkeypatch, tmp_path):
+    _set_loop_env(monkeypatch)
+    _stub_loop_heavy(monkeypatch)
+    calls = _record_http_sends(monkeypatch, tmp_path)
+
+    main.run_cheap_competition_loop(once=True, team="both", market_hours_only=False, dry_run_loop=False)
+
+    channels = [c for c, _ in calls]
+    # Exactly one summary, and it lands after both team briefs (not interleaved).
+    assert channels.count(333) == 1
+    assert channels.index(333) == len(channels) - 1
+
+
+def test_loop_summary_disabled_posts_zero_summaries(monkeypatch, tmp_path):
+    _set_loop_env(monkeypatch, DISCORD_POST_COMPETITION_SUMMARY="false")
+    _stub_loop_heavy(monkeypatch)
+    calls = _record_http_sends(monkeypatch, tmp_path)
+
+    main.run_cheap_competition_loop(once=True, team="both", market_hours_only=False, dry_run_loop=False)
+
+    channels = [c for c, _ in calls]
+    assert channels.count(333) == 0
+    assert channels.count(111) == 1 and channels.count(222) == 1
+
+
+def test_loop_single_team_does_not_spam_summaries(monkeypatch, tmp_path):
+    _set_loop_env(monkeypatch)
+    _stub_loop_heavy(monkeypatch)
+    calls = _record_http_sends(monkeypatch, tmp_path)
+
+    main.run_cheap_competition_loop(once=True, team="team_alpha", market_hours_only=False, dry_run_loop=False)
+
+    channels = [c for c, _ in calls]
+    assert channels.count(333) == 0  # no head-to-head scoreboard for a single team
+    assert channels.count(111) == 1
+    assert channels.count(222) == 0
+
+
+def test_loop_summary_failure_does_not_crash(monkeypatch, tmp_path, capsys):
+    _set_loop_env(monkeypatch)
+    _stub_loop_heavy(monkeypatch)
+    import src.discord_bot.competition_updates as cu
+
+    monkeypatch.setattr(cu, "DEFAULT_STATE_PATH", tmp_path / "state.json")
+
+    def _boom(channel_id, message, token):
+        if channel_id == 333:
+            raise RuntimeError("simulated summary API failure")
+
+    monkeypatch.setattr(cu, "_http_send", _boom)
+
+    # Must complete the iteration without raising.
+    main.run_cheap_competition_loop(once=True, team="both", market_hours_only=False, dry_run_loop=False)
+    out = capsys.readouterr().out
+    assert "Cheap competition loop iteration 1" in out
+
+
+def test_summary_dedup_skips_repeat_in_same_iteration(tmp_path):
+    cfg = _cfg()
+    sender = FakeSender()
+    state = tmp_path / "state.json"
+
+    first = post_competition_iteration_summary(config=cfg, sender=sender, iteration=7, state_path=state)
+    second = post_competition_iteration_summary(config=cfg, sender=sender, iteration=7, state_path=state)
+    assert first["sent"] is True
+    assert second["sent"] is False
+    assert "already posted this iteration" in second["reason"]
+    assert len(sender.calls) == 1
+
+    # A later iteration is free to post again.
+    third = post_competition_iteration_summary(config=cfg, sender=sender, iteration=8, state_path=state)
+    assert third["sent"] is True
+    assert len(sender.calls) == 2
 
 
 def test_gather_context_degrades_safely(monkeypatch):
