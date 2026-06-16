@@ -17,6 +17,7 @@ data/research/
 data/attribution/
 data/reviews/
 data/team_memory/
+data/discord/
 *.pyc
 .DS_Store
 .idea/

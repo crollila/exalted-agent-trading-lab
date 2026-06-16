@@ -312,3 +312,12 @@ The Arena redesign is a presentation change only. It does **not** change any pap
 never submits broker orders, never displays secrets, and never bypasses deterministic risk, review
 approvals, the Portfolio Manager, autonomy gates, daily caps, the kill switch, team credentials, or the
 paper-only wrapper. The deterministic risk engine remains authoritative.
+
+## Discord team-thought updates status (Phase 7S)
+
+The Operator page shows a compact **Discord team-thought updates** status block: whether
+per-iteration updates are enabled, whether the bot token is configured, whether each team's channel
+and the competition-summary channel are configured (true/false — channel IDs are never shown), the
+min-interval throttle, the last update time per team, and the last error (redacted) if any. It is
+read-only and reflects `ENABLE_DISCORD_ITERATION_UPDATES` and the related `DISCORD_POST_*` settings.
+See `docs/discord_bot_setup.md` for configuration.

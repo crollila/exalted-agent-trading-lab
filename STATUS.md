@@ -436,10 +436,11 @@ Current allowed mode:
 - Phase 7E adds a local Discord command center only; Discord commands summarize local lab state and do not call Alpaca, submit orders, approve execution, or change portfolio state.
 - Phase 7F adds team paper credential validation, expanded proposal routing, and explicit stock-long paper execution only; advanced short/margin/options paper execution remains disabled until deterministic risk gates and mocked broker support are implemented and tested.
 - Phase 7G adds natural Discord team chat and autonomous paper-cycle scaffolding only; normal chat cannot trade, and autonomous paper cycles require explicit team autonomy, paper-stocks-only mode, research proposal JSON, risk and review approval tokens, daily cap checks, deterministic Python risk approval, and the Alpaca paper-only wrapper.
+- Phase 7S adds per-iteration Discord team-thought updates only; the cheap loop posts read-only "team room briefings" (cheap-gate decision, PortfolioManager stance, thesis, learning, SPY-relative performance, broker outcomes) plus an optional Alpha-vs-Beta scoreboard. It reads local artifacts only, never posts secrets, never submits or approves orders, and Discord failures never crash the loop or affect order flow. Disabled by default (`ENABLE_DISCORD_ITERATION_UPDATES=false`); overnight (market closed) stays silent unless explicitly enabled.
 
 ## Next step
 
-Run the Discord team-chat loop in the real server, observe Team Alpha and Team Beta paper-cycle behavior, and only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
+Run `run-cheap-competition-loop` with `ENABLE_DISCORD_ITERATION_UPDATES=true` against the real server, observe the per-iteration Team Alpha / Team Beta briefings during market hours, confirm overnight stays quiet, and only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
 
 ## Project manager rule
 

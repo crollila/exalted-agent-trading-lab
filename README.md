@@ -205,6 +205,21 @@ python -m src.main discord-bot
 
 See `docs/discord_bot_setup.md` for beginner setup steps. The bot supports natural chat in configured `#team-alpha` and `#team-beta` channels. It also supports `!status`, `!teams`, `!team_paper_status`, `!team_positions`, `!review_proposals`, `!run_tournament`, `!ask_team`, `!ask_agent`, `!latest_agent_run`, `!paper_trade_team`, `!team_report`, `!autonomy_status`, `!enable_autonomy`, `!disable_autonomy`, `!run_team_cycle`, `!schedule_reports_status`, and `!daily_team_report_now`, plus slash commands when Discord sync succeeds.
 
+### Discord team-thought updates per iteration (Phase 7S)
+
+When enabled, `run-cheap-competition-loop` posts a concise "team room briefing" to each team's
+Discord channel every iteration — gate decision and why, PortfolioManager stance, latest thesis,
+attribution/learning, SPY-relative performance, broker outcomes, and a paper-only safety badge —
+plus an optional Alpha-vs-Beta scoreboard. It is **off by default** (`ENABLE_DISCORD_ITERATION_UPDATES=false`),
+read-only, never posts secrets, and Discord failures never crash the loop. Overnight (market closed)
+stays silent unless `DISCORD_POST_WHEN_MARKET_CLOSED=true`. Preview without sending:
+
+```bash
+python -m src.main discord-iteration-update --team both --summary --dry-run
+```
+
+See `docs/discord_bot_setup.md` for the full env-var list.
+
 ### Local dashboard (Phase 7H)
 
 Launch the local-only Streamlit operator console for monitoring and control:

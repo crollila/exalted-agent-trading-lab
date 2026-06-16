@@ -189,3 +189,43 @@ Hermes may propose `stock_long`, `stock_short`, `stock_margin_long`, `stock_marg
 `!run_team_cycle` is the autonomous-cycle scaffold. It asks the research agent for proposal JSON, asks the risk and review agents for explicit approval tokens, and only calls the existing paper execution path when the team's autonomy is enabled, both approval tokens are present, stock-long-only mode is active, daily order/notional caps are still available, and deterministic Python risk approves. The deterministic Python risk engine remains the final hard gate.
 
 `!schedule_reports_status` and `!daily_team_report_now` are manual report scaffolds in this phase. They do not start an external scheduler. `!daily_team_report_now` summarizes both team paper statuses, positions, latest saved team proposals, latest routing summary when available, and the paper-only/no-live-trading reminder.
+
+## Phase 7S: per-iteration team-thought updates from the cheap loop
+
+The cheap competition loop (`python -m src.main run-cheap-competition-loop`) can post a concise
+"team room briefing" to each team's channel every iteration so you can watch what Team Alpha and
+Team Beta are doing and why. This is **off by default** and is read-only: it summarizes local
+artifacts (cheap-gate decision, PortfolioManager stance, latest thesis, attribution/learning,
+SPY-relative performance, broker outcomes) and a paper-only safety badge. It never submits orders,
+never posts secrets, and Discord problems (missing token/channel, rate limit, network down) only
+print a warning — the trading loop keeps running.
+
+Reuses your existing `DISCORD_BOT_TOKEN` and the same `DISCORD_TEAM_ALPHA_CHANNEL_ID` /
+`DISCORD_TEAM_BETA_CHANNEL_ID` channel IDs. The optional Alpha-vs-Beta scoreboard posts to the
+channel named by `DISCORD_COMPETITION_SUMMARY_CHANNEL` (`tournament_results` or `paper_trading_log`).
+
+Enable in `.env`:
+
+```
+ENABLE_DISCORD_ITERATION_UPDATES=true
+DISCORD_POST_WHEN_MARKET_CLOSED=false   # stay quiet overnight (recommended)
+DISCORD_POST_REVIEW_ONLY=true
+DISCORD_POST_FULL_CYCLE=true
+DISCORD_POST_CHEAP_SKIP=false           # set true only if you want every-iteration "no change" posts
+DISCORD_POST_COMPETITION_SUMMARY=true
+DISCORD_COMPETITION_SUMMARY_CHANNEL=tournament_results
+DISCORD_UPDATE_MIN_INTERVAL_SECONDS=300 # throttle per team
+DISCORD_ITERATION_UPDATE_MAX_CHARS=1800
+```
+
+Preview without sending (no Discord API call, no secrets printed):
+
+```
+python -m src.main discord-iteration-update --team team_alpha --dry-run
+python -m src.main discord-iteration-update --team team_beta --dry-run
+python -m src.main discord-iteration-update --team both --summary --dry-run
+```
+
+Without `--dry-run`, the command sends only if `ENABLE_DISCORD_ITERATION_UPDATES=true` and the bot
+token + target channel ID are configured; otherwise it reports a safe skip. The same posting happens
+automatically each iteration when you run `run-cheap-competition-loop` with updates enabled.

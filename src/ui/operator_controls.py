@@ -325,8 +325,43 @@ def render_operator_bot_controls(st, *, is_operator: bool, is_expert: bool) -> N
             with st.expander("Output", expanded=False):
                 st.code(result.output)
 
+    st.divider()
+    _render_discord_iteration_updates_status(st)
+
     if is_expert:
         tail = cheap_loop_log_tail()
         if tail:
             with st.expander("Cheap loop log (tail, redacted)", expanded=False):
                 st.code(tail)
+
+
+def _render_discord_iteration_updates_status(st) -> None:
+    """Show Phase 7S Discord iteration-update status (no channel IDs, redacted)."""
+
+    st.subheader("Discord team-thought updates (Phase 7S)")
+    try:
+        from src.discord_bot.competition_updates import iteration_updates_status
+
+        status = iteration_updates_status()
+    except Exception as exc:  # noqa: BLE001 - status panel must never crash the UI
+        st.caption(f"Discord iteration-update status unavailable: {exc}")
+        return
+
+    if status["enabled"]:
+        st.success("Iteration updates ENABLED (posts per loop iteration).")
+    else:
+        st.info("Iteration updates disabled (set ENABLE_DISCORD_ITERATION_UPDATES=true to enable).")
+    st.caption(
+        f"Bot token configured: {status['token_configured']} | "
+        f"min interval: {status['min_interval_seconds']}s | "
+        f"competition summary: {status['post_competition_summary']} "
+        f"(channel configured: {status['summary_channel_configured']})"
+    )
+    for team_id, info in status["teams"].items():
+        last = info.get("last_update_at") or "never"
+        err = info.get("last_error")
+        line = (
+            f"- {team_id}: channel configured {info['channel_configured']} | "
+            f"last update {last}"
+        )
+        st.caption(line + (f" | last error: {err}" if err else ""))

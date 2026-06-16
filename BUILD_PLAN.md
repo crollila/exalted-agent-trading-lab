@@ -1306,3 +1306,44 @@ Delivered:
 Non-goals (unchanged): no live trading, no new broker execution path, no secrets displayed, no external
 web scraping/CDN, no copyrighted assets, no weakening of any safety gate. The UI calls existing safe
 CLI/helpers only; the deterministic risk engine remains authoritative.
+
+## Phase 7S - Discord Team-Thought Updates Per Iteration
+
+Goal: every `run-cheap-competition-loop` iteration posts a concise, readable "team room
+briefing" to each team's Discord channel so the operator can watch what Alpha and Beta are
+doing, *why* the cheap gate decided what it decided, and what they are thinking.
+
+- New module `src/discord_bot/competition_updates.py` (reuses `DISCORD_BOT_TOKEN` + the existing
+  team/special channel env vars from `src/discord_bot/bot.py`; never re-implements token handling):
+  - `redact_secrets` (scrubs known secret env values + Discord/OpenAI/bearer token shapes),
+    `truncate_discord_message` (keeps under the Discord limit),
+  - `gather_team_iteration_context` (reads local artifacts only: cheap-gate decision, scorecard /
+    PortfolioManager stance, attribution outcomes, daily review, strategy memory, learning ledger,
+    daily SPY attribution, kill switch — missing data degrades to `n/a`),
+  - `build_team_iteration_update` / `build_competition_iteration_summary` (compact briefs, not raw logs),
+  - `send_team_iteration_update` / `send_competition_iteration_summary` (REST POST via the bot token,
+    injectable sender for tests; never raises),
+  - `post_team_iteration_update` / `post_competition_iteration_summary` (decide + build + send orchestrators
+    with mode/market gating + min-interval throttle; dry-run previews without sending),
+  - `iteration_updates_status` (secret-free, channel-IDs-hidden status for the UI).
+- Loop integration in `run_cheap_competition_loop`: after each team's gate decision the loop posts a brief
+  classified as full-cycle / review-only / cheap-skip / market-closed, plus an optional end-of-iteration
+  Alpha-vs-Beta scoreboard summary. Discord is best-effort only — a missing token/channel, rate limit, or
+  network error prints a concise warning and the loop continues; Discord status never affects order flow.
+- New CLI: `python -m src.main discord-iteration-update --team {team_alpha|team_beta|both} [--summary] [--dry-run]`.
+  `--dry-run` previews the message(s) and never calls the Discord API.
+- Config (all opt-in; default OFF): `ENABLE_DISCORD_ITERATION_UPDATES`, `DISCORD_POST_WHEN_MARKET_CLOSED`,
+  `DISCORD_POST_REVIEW_ONLY`, `DISCORD_POST_FULL_CYCLE`, `DISCORD_POST_CHEAP_SKIP`, `DISCORD_POST_BROKER_EVENTS`,
+  `DISCORD_POST_SCOREBOARD_SUMMARY`, `DISCORD_POST_COMPETITION_SUMMARY`, `DISCORD_COMPETITION_SUMMARY_CHANNEL`,
+  `DISCORD_ITERATION_UPDATE_STYLE`, `DISCORD_ITERATION_UPDATE_MAX_CHARS`, `DISCORD_UPDATE_MIN_INTERVAL_SECONDS`.
+  Overnight (market closed) is silent by default so the channel is not spammed.
+- UI: the Operator page shows a compact "Discord team-thought updates" status block (enabled/disabled, token
+  configured true/false, per-team channel configured true/false, last update time, last error redacted) — no
+  channel IDs are surfaced.
+- Tests: `tests/test_phase7s.py` (mocked sender only) — builds Alpha/Beta briefs, `n/a` on missing data,
+  truncation, secret/API-key redaction, market-closed/full-cycle/review-only/cheap-skip posting rules,
+  min-interval throttle, send-failure-does-not-crash, dry-run CLI prints-and-does-not-send, scoreboard summary.
+
+Non-goals (unchanged): no live trading, no new broker execution path, LLMs do not execute trades, no secrets
+posted, no weakening of any safety gate. The deterministic risk engine, PortfolioManager, kill switch, team
+credentials, daily caps, and paper-only wrappers remain authoritative; this phase only *reads* and *reports*.

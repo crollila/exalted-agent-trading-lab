@@ -811,11 +811,16 @@ def run_cheap_competition_loop(
     With ``--dry-run-loop`` it prints intended actions without running full cycles.
     """
 
+    import os
     import time as _time
 
     sleep_fn = sleep_fn or _time.sleep
     teams = list(WEEK_TEAMS) if team == "both" else [team]
     iteration = 0
+    review_only_during_market_hours = os.getenv(
+        "REVIEW_ONLY_DURING_MARKET_HOURS", "true"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    discord_update_config = _discord_iteration_update_config()
 
     while True:
         iteration += 1
@@ -825,8 +830,12 @@ def run_cheap_competition_loop(
             print(ks.describe())
 
         market_open = _cheap_loop_market_open() if market_hours_only else None
-        if market_hours_only and market_open is False:
+        market_closed = market_hours_only and market_open is False
+
+        if market_closed:
             print("Market is closed; staying cheap (refresh/status/export only, no full cycles this iteration).")
+            if review_only_during_market_hours and (run_review_only_when_skipped or llm_review_when_skipped or llm_daily_review_at_close):
+                print("Market closed; LLM/review-only work skipped because REVIEW_ONLY_DURING_MARKET_HOURS=true.")
 
         # Cheap, read-only steps every iteration.
         if dry_run_loop:
@@ -841,22 +850,31 @@ def run_cheap_competition_loop(
                 print(f"(refresh-proposal-attribution error: {exc}; continuing loop)")
             run_week_competition_status()
 
+        market_state = "open" if market_open is True else ("closed" if market_open is False else "unknown")
+
         for tid in teams:
             decision, _gate_config = _evaluate_team_cheap_gate(tid)
             print(
                 f"[{tid}] gate: should_run_full_cycle={decision.should_run_full_cycle} "
                 f"recommend_review_only={decision.recommend_review_only} reason={decision.reason}"
             )
-            allow_full = decision.should_run_full_cycle and not (market_hours_only and market_open is False)
+            allow_full = decision.should_run_full_cycle and not market_closed
+            allow_review_when_skipped = (
+                (run_review_only_when_skipped or llm_review_when_skipped)
+                and not (market_closed and review_only_during_market_hours)
+            )
+
             if allow_full:
+                cycle_action = "full_cycle"
                 if dry_run_loop:
                     print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm")
                 else:
                     run_week_cycle_cli(team=tid, proposal_source="llm")
-            elif run_review_only_when_skipped or llm_review_when_skipped:
+            elif allow_review_when_skipped:
                 # Gate skipped a full cycle: do advisory review-only + cheap LLM
                 # critique/summary stages. NEVER runs the expensive strategy model
                 # and NEVER submits orders.
+                cycle_action = "review_only"
                 if dry_run_loop:
                     print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
                     if llm_review_when_skipped:
@@ -869,9 +887,33 @@ def run_cheap_competition_loop(
                         except Exception as exc:  # noqa: BLE001 - advisory step must not kill the loop
                             print(f"({tid} llm-daily-review unavailable: {exc}; continuing loop)")
             else:
-                print(f"[{tid}] staying cheap this iteration (no full cycle).")
+                cycle_action = "market_closed" if market_closed else "cheap_skip"
+                if market_closed and review_only_during_market_hours and (run_review_only_when_skipped or llm_review_when_skipped):
+                    print(f"[{tid}] market closed; review-only/LLM review skipped.")
+                else:
+                    print(f"[{tid}] staying cheap this iteration (no full cycle).")
 
-        if llm_daily_review_at_close and market_hours_only and market_open is False:
+            # Phase 7S: post a concise team-thought brief to that team's Discord channel.
+            _post_discord_iteration_update(
+                config=discord_update_config,
+                team_id=tid,
+                iteration=iteration,
+                cycle_action=cycle_action,
+                gate_decision=decision,
+                market_state=market_state,
+                kill_switch_engaged=ks.engaged,
+                llm_review_when_skipped=llm_review_when_skipped,
+                dry_run=dry_run_loop,
+            )
+
+        allow_daily_review_at_close = (
+            llm_daily_review_at_close
+            and market_hours_only
+            and market_open is False
+            and not review_only_during_market_hours
+        )
+
+        if allow_daily_review_at_close:
             if dry_run_loop:
                 print("[dry-run] would run: run-llm-daily-review (market closed; advisory, no orders)")
             else:
@@ -879,16 +921,173 @@ def run_cheap_competition_loop(
                     run_llm_daily_review(team=None if team == "both" else team)
                 except Exception as exc:  # noqa: BLE001 - advisory close step must not kill the loop
                     print(f"(llm-daily-review-at-close unavailable: {exc}; continuing loop)")
+        elif llm_daily_review_at_close and market_closed and review_only_during_market_hours:
+            print("Market closed; llm-daily-review-at-close skipped because REVIEW_ONLY_DURING_MARKET_HOURS=true.")
 
         if dry_run_loop:
             print("[dry-run] would run: export-team-scorecards")
         else:
             run_export_team_scorecards()
 
+        # Phase 7S: optional Alpha-vs-Beta scoreboard summary to the summary channel.
+        _post_discord_competition_summary(
+            config=discord_update_config,
+            kill_switch_engaged=ks.engaged,
+            next_wake_seconds=None if once else sleep_seconds,
+            teams=tuple(teams),
+            dry_run=dry_run_loop,
+        )
+
         if once:
             break
         print(f"Sleeping {sleep_seconds}s before next cheap iteration...")
         sleep_fn(sleep_seconds)
+
+
+def _discord_iteration_update_config():
+    """Load the Phase 7S Discord iteration-update config. Never raises."""
+
+    try:
+        from src.discord_bot.competition_updates import DiscordIterationUpdateConfig
+
+        return DiscordIterationUpdateConfig.from_env()
+    except Exception as exc:  # noqa: BLE001 - Discord config must never crash the loop
+        print(f"(Discord iteration updates unavailable: {exc}; continuing loop)")
+        return None
+
+
+def _iteration_llm_model(cycle_action: str, llm_review_when_skipped: bool) -> str | None:
+    """Best-effort model NAME (never secrets) for the stage that ran this iteration."""
+
+    try:
+        status = routing_status()
+    except Exception:  # noqa: BLE001 - routing status is advisory only
+        return None
+    if cycle_action == "full_cycle":
+        return status.get("strategy_model")
+    if cycle_action == "review_only" and llm_review_when_skipped:
+        return status.get("review_model")
+    return None
+
+
+def _post_discord_iteration_update(
+    *,
+    config,
+    team_id: str,
+    iteration: int,
+    cycle_action: str,
+    gate_decision,
+    market_state: str,
+    kill_switch_engaged: bool,
+    llm_review_when_skipped: bool,
+    dry_run: bool,
+) -> None:
+    """Post a team's Discord iteration brief. Never crashes the loop."""
+
+    if config is None or not getattr(config, "enabled", False):
+        return
+    try:
+        from src.discord_bot.competition_updates import post_team_iteration_update
+
+        post_team_iteration_update(
+            team_id,
+            iteration=iteration,
+            cycle_action=cycle_action,
+            gate_decision=gate_decision,
+            market_state=market_state,
+            kill_switch_engaged=kill_switch_engaged,
+            llm_model_used=_iteration_llm_model(cycle_action, llm_review_when_skipped),
+            config=config,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001 - Discord posting must never crash the loop
+        print(f"(Discord iteration update failed for {team_id}: {exc}; continuing loop)")
+
+
+def _post_discord_competition_summary(
+    *,
+    config,
+    kill_switch_engaged: bool,
+    next_wake_seconds: int | None,
+    teams: tuple[str, ...],
+    dry_run: bool,
+) -> None:
+    """Post the optional Alpha-vs-Beta scoreboard summary. Never crashes the loop."""
+
+    if config is None or not getattr(config, "enabled", False):
+        return
+    try:
+        from src.discord_bot.competition_updates import post_competition_iteration_summary
+
+        post_competition_iteration_summary(
+            config=config,
+            kill_switch_engaged=kill_switch_engaged,
+            next_wake_seconds=next_wake_seconds,
+            teams=teams,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001 - Discord posting must never crash the loop
+        print(f"(Discord competition summary failed: {exc}; continuing loop)")
+
+
+def run_discord_iteration_update(
+    team: str = "both",
+    *,
+    summary: bool = False,
+    dry_run: bool = False,
+) -> None:
+    """Build and (unless --dry-run) send Phase 7S Discord iteration briefs.
+
+    Reads local artifacts only. With ``--dry-run`` it prints the message(s) that
+    would be sent and never calls the Discord API. Secrets are never printed.
+    """
+
+    from src.discord_bot.competition_updates import (
+        post_competition_iteration_summary,
+        post_team_iteration_update,
+    )
+
+    config = _discord_iteration_update_config()
+    if config is None:
+        raise SystemExit(1)
+
+    teams = list(WEEK_TEAMS) if team == "both" else [team]
+    ks = read_kill_switch()
+
+    print("=== Discord iteration update (Phase 7S; paper-only; no secrets) ===")
+    print(f"Enabled: {config.enabled} | token configured: {config.token is not None} | dry_run: {dry_run}")
+    if not config.enabled and not dry_run:
+        print(
+            f"{'ENABLE_DISCORD_ITERATION_UPDATES'} is false; nothing will be sent. "
+            "Use --dry-run to preview, or enable it in .env."
+        )
+
+    for tid in teams:
+        decision, _gate_config = _evaluate_team_cheap_gate(tid)
+        cycle_action = "full_cycle" if decision.should_run_full_cycle else (
+            "review_only" if decision.recommend_review_only else "cheap_skip"
+        )
+        result = post_team_iteration_update(
+            tid,
+            cycle_action=cycle_action,
+            gate_decision=decision,
+            market_state="unknown",
+            kill_switch_engaged=ks.engaged,
+            config=config,
+            dry_run=dry_run,
+        )
+        print(f"[{tid}] result: sent={result['sent']} reason={result['reason']}")
+
+    if summary:
+        result = post_competition_iteration_summary(
+            config=config,
+            kill_switch_engaged=ks.engaged,
+            teams=tuple(teams),
+            dry_run=dry_run,
+        )
+        print(f"[summary] result: sent={result['sent']} reason={result['reason']}")
+
+    print("Paper-only. LLMs do not execute trades. Orders require deterministic gates.")
 
 
 def run_week_competition_status() -> None:
@@ -1956,6 +2155,22 @@ def main() -> None:
     llm_daily_review_parser.add_argument(
         "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
     )
+    discord_iter_parser = subparsers.add_parser(
+        "discord-iteration-update",
+        help="Build/send Phase 7S Discord team-thought briefs (paper-only; --dry-run to preview)",
+    )
+    discord_iter_parser.add_argument(
+        "--team", choices=("team_alpha", "team_beta", "both"), default="both",
+        help="Team(s) to brief. Defaults to both.",
+    )
+    discord_iter_parser.add_argument(
+        "--summary", action="store_true",
+        help="Also build/send the Alpha-vs-Beta scoreboard summary.",
+    )
+    discord_iter_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the message(s) that would be sent without calling the Discord API.",
+    )
     cheap_loop_parser = subparsers.add_parser(
         "run-cheap-competition-loop",
         help="Cost-saving runner: refresh + gate every interval; full LLM cycle only when the gate says so",
@@ -2133,6 +2348,8 @@ def main() -> None:
         run_llm_review_status()
     elif args.command == "run-llm-daily-review":
         run_llm_daily_review(team=args.team)
+    elif args.command == "discord-iteration-update":
+        run_discord_iteration_update(team=args.team, summary=args.summary, dry_run=args.dry_run)
     elif args.command == "run-cheap-competition-loop":
         run_cheap_competition_loop(
             once=args.once,
