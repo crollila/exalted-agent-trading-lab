@@ -97,6 +97,25 @@ gate says so. It submits nothing on its own, respects the kill switch, and never
 model routing (Phase 7O) only selects which model name handles each task; it changes no risk behavior and
 exposes only `true/false` for API-key configuration, never key contents.
 
+### LLM-backed advisory review agents (Phase 7P)
+
+The routed cheaper models back portfolio review, critique, summaries, daily reviews, and (optionally)
+research synthesis. **These agents are advisory only — they never control execution.** Each stage:
+
+- is independently gated by an `ENABLE_LLM_*` flag and falls back to deterministic text when disabled or
+  when its provider fails (malformed JSON, missing key, or any error are tolerated, never fatal);
+- returns `model_used` / `provider_used` metadata and never reads, prints, or logs secrets.
+
+The **advisory portfolio manager** (`ENABLE_LLM_PORTFOLIO_MANAGER`, default OFF) runs *after* the
+deterministic Portfolio Manager and is merged **narrow-only**: it may lower the new-order cap, force
+`no_trade`/`hold`, append warnings/risk notes, and suggest advisory trims. It can **never** raise caps,
+unblock a deterministically blocked decision (e.g. low buying power), bypass deterministic risk/review
+approvals, authorize options/spreads/naked options, or change team credentials / broker mode. The
+deterministic Portfolio Manager and risk engine remain authoritative. `run-llm-daily-review` and the
+`--llm-review-when-skipped` loop path are advisory: they build/compress memory and narrative but submit
+**no** orders and never build a broker client. `research_synthesis` performs no web search; it only
+summarizes already-fetched snippets.
+
 ### Broker rejections
 
 Failed broker submissions (e.g. insufficient buying power, wash-trade detection) are recorded

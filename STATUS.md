@@ -108,6 +108,39 @@ strategy/proposal path; cheaper models are configured for review/critique/summar
   `--run-review-only-when-skipped`, `--dry-run-loop`. It never bypasses the kill switch, never submits
   unless `run-week-cycle` is actually invoked, and never prints secrets.
 
+Phase 7P — LLM-Backed Review Agents Using Routed Cheap Models. The routed cheaper models now actually
+back portfolio review, critique, summaries, daily reviews, and (optionally) research synthesis. These
+agents improve reasoning and written strategy quality — they are **advisory only** and never control
+execution. The deterministic risk engine and PortfolioManager remain authoritative.
+
+- `src/agents/llm_review_agents.py` provides `generate_trade_critique`, `generate_daily_review_narrative`,
+  `summarize_strategy_memory`, `synthesize_research_sources`, `build_team_debate`, and an advisory
+  portfolio manager (`generate_portfolio_manager_advice` + `merge_portfolio_advice` +
+  `apply_llm_portfolio_manager`). Each uses `build_routed_provider(task)`, accepts an injected/mock
+  provider, tolerates malformed JSON + provider failure, falls back to deterministic text when its flag
+  is off or the provider fails, and returns `model_used`/`provider_used` (never secrets).
+- Per-stage flags: `ENABLE_LLM_PORTFOLIO_MANAGER=false`, `ENABLE_LLM_REVIEW_AGENT=true`,
+  `ENABLE_LLM_CRITIQUE_AGENT=true`, `ENABLE_LLM_SUMMARY_AGENT=true`, `ENABLE_LLM_RESEARCH_SYNTHESIS=false`,
+  `ENABLE_LLM_DAILY_REVIEW=true`. Portfolio manager + research synthesis default OFF (closest to trade
+  decisions / least proven); cheap advisory stages default ON.
+- Portfolio manager merge is **narrow-only**: the LLM may lower the new-order cap, force no-trade/hold,
+  add warnings, and suggest advisory trims — it can never widen caps, unblock low-buying-power buys,
+  bypass deterministic risk/review approvals, authorize options/spreads/naked options, or change team
+  credentials / broker mode.
+- `src/learning/strategy_memory.py` rolls daily reviews into a compact multi-day memory under the ignored
+  `data/team_memory/` (today / trailing-3 / trailing-5 / week-to-date lessons, recurring winning/losing
+  patterns, symbols/sectors to favor/avoid, adjustments for next cycle/tomorrow, confidence, recommended
+  mode exploration/conservation/reset, `last_summary_model_used`). LLM-compressed with the summary model
+  when enabled; deterministic otherwise. `build_llm_context` now feeds a compact `strategy_memory` block
+  and an advisory `team_debate` (research feedback only) into future strategy prompts.
+- New commands: `llm-review-status` (enabled stages + model per stage + `API key configured`, no
+  secrets); `run-llm-daily-review [--team]` (deterministic attribution → optional LLM narrative → rolls
+  multi-day memory → writes ignored artifact → prints model used → submits **no** orders);
+  `run-cheap-competition-loop` adds `--llm-review-when-skipped` and `--llm-daily-review-at-close`. When
+  the gate skips a full cycle, the LLM-review path runs review-only + the cheap advisory daily review and
+  never runs the strategy model or submits orders. `run-week-cycle` prints a compact team debate when the
+  critique/review agents are enabled.
+
 Self-improvement here means runtime memory, scorecards, and prompt feedback — **not**
 model-weight training. Paper trading does not prove live profitability.
 

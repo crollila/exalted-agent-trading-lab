@@ -16,6 +16,7 @@ data/scorecards/
 data/research/
 data/attribution/
 data/reviews/
+data/team_memory/
 *.pyc
 .DS_Store
 .idea/

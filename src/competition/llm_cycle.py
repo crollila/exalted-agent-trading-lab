@@ -14,9 +14,15 @@ from typing import Any, Callable
 
 from src.agents.llm_provider import LLMProvider
 from src.agents.llm_proposal_agent import generate_llm_proposals
+from src.agents.llm_review_agents import LLMReviewFlags, team_debate_context
 from src.brokers.alpaca_client import AlpacaClientWrapper
 from src.competition.attribution import DEFAULT_ATTRIBUTION_DIR, performance_feedback
-from src.competition.daily_review import DEFAULT_REVIEWS_DIR, daily_review_context
+from src.competition.daily_review import (
+    DEFAULT_REVIEWS_DIR,
+    daily_review_context,
+    load_daily_spy_attribution,
+)
+from src.learning.strategy_memory import DEFAULT_TEAM_MEMORY_DIR, strategy_memory_context
 from src.competition.scorecard import DEFAULT_SCORECARD_DIR, load_latest_scorecard
 from src.competition.week_competition import (
     DEFAULT_COMPETITION_DIR,
@@ -51,14 +57,38 @@ def build_llm_context(
     competition_dir: Path | str = DEFAULT_COMPETITION_DIR,
     attribution_dir: Path | str = DEFAULT_ATTRIBUTION_DIR,
     reviews_dir: Path | str = DEFAULT_REVIEWS_DIR,
+    team_memory_dir: Path | str = DEFAULT_TEAM_MEMORY_DIR,
     research_run: ResearchRunResult | None = None,
     watchlist: tuple[str, ...] = (),
+    review_flags: LLMReviewFlags | None = None,
+    env: Any | None = None,
 ) -> dict[str, Any]:
     """Assemble allowlisted, provenance-tagged context for the LLM. No secrets."""
 
     scorecard = load_latest_scorecard(team_id, scorecard_dir)
     ledger = TeamLearningLedger.load(team_id, learning_dir)
     watch = watchlist or ("SPY", "QQQ", "AAPL", "MSFT", "NVDA")
+    flags = review_flags or LLMReviewFlags.from_env(env)
+
+    feedback = performance_feedback(team_id, attribution_dir=attribution_dir)
+
+    # Compact, deterministic multi-day strategy memory + advisory team debate.
+    # Both are RESEARCH FEEDBACK ONLY; neither authorizes bypassing risk.
+    strategy_memory = strategy_memory_context(team_id, team_memory_dir=team_memory_dir)
+    debate_enabled = flags.critique_agent or flags.review_agent
+    try:
+        debate_attribution = load_daily_spy_attribution(
+            team_id, scorecard_dir=scorecard_dir, attribution_dir=attribution_dir
+        )
+    except Exception:  # noqa: BLE001 - debate context is best-effort, never crashes the cycle
+        debate_attribution = None
+    team_debate = team_debate_context(
+        team_id,
+        attribution=debate_attribution,
+        feedback=feedback,
+        enabled=debate_enabled,
+        env=env,
+    )
 
     research_block: dict[str, Any] = {"available": False, "results": [], "note": "no research run"}
     if research_run is not None:
@@ -87,8 +117,10 @@ def build_llm_context(
             "rejected_ideas": ledger.rejected_ideas[-8:],
         },
         "competition_status": competition_status(competition_dir, scorecard_dir),
-        "performance_feedback": performance_feedback(team_id, attribution_dir=attribution_dir),
+        "performance_feedback": feedback,
         "daily_review": daily_review_context(team_id, reviews_dir=reviews_dir, learning_dir=learning_dir),
+        "strategy_memory": strategy_memory,
+        "team_debate": team_debate,
         "research": research_block,
     }
 
@@ -108,6 +140,7 @@ def build_llm_proposal_source(
     competition_dir: Path | str = DEFAULT_COMPETITION_DIR,
     attribution_dir: Path | str = DEFAULT_ATTRIBUTION_DIR,
     reviews_dir: Path | str = DEFAULT_REVIEWS_DIR,
+    team_memory_dir: Path | str = DEFAULT_TEAM_MEMORY_DIR,
     research_dir: Path | str = DEFAULT_RESEARCH_DIR,
 ) -> Callable[[str], ProposalBundle]:
     """Return a ``run_week_cycle``-compatible proposal source backed by the LLM."""
@@ -132,6 +165,7 @@ def build_llm_proposal_source(
             competition_dir=competition_dir,
             attribution_dir=attribution_dir,
             reviews_dir=reviews_dir,
+            team_memory_dir=team_memory_dir,
             research_run=research_run,
             watchlist=research_config.watchlist,
         )

@@ -31,6 +31,12 @@ from src.brokers.paper_auth import (
     settings_for_source,
 )
 from src.agents.llm_provider import LLMProviderError, build_provider
+from src.agents.llm_review_agents import (
+    LLMReviewFlags,
+    build_team_debate,
+    generate_daily_review_narrative,
+    review_status,
+)
 from src.agents.model_routing import build_routed_provider, routing_status
 from src.competition.llm_cycle import build_llm_proposal_source
 from src.competition.portfolio_manager import PortfolioManagerConfig
@@ -48,7 +54,9 @@ from src.competition.daily_review import (
     format_daily_spy_attribution,
     format_daily_team_review,
     load_daily_spy_attribution,
+    load_latest_daily_team_review,
 )
+from src.learning.strategy_memory import format_strategy_memory, update_strategy_memory
 from src.research.market_data import build_alpaca_price_fn, latest_price, spy_return
 from src.research.research import build_alpaca_news_fn, build_openai_web_fn
 from src.research.research_config import ResearchConfig
@@ -449,6 +457,27 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
         )
         if result.no_trade:
             print(f"No trade decision: {decision.rejected_new_ideas_reason or decision.rationale}")
+
+    # Compact team debate (advisory; only when critique/review agents are enabled).
+    review_flags = LLMReviewFlags.from_env()
+    if review_flags.critique_agent or review_flags.review_agent:
+        try:
+            attribution = load_daily_spy_attribution(team)
+            feedback = performance_feedback(team)
+        except Exception:  # noqa: BLE001 - debate is best-effort advisory context
+            attribution, feedback = None, {}
+        debate = build_team_debate(
+            team_id=team, attribution=attribution, feedback=feedback,
+            review=load_latest_daily_team_review(team),
+        )
+        print(f"=== Team debate ({team}; advisory only; model={debate['model_used']}, source={debate['source']}) ===")
+        print(f"  Bull: {debate.get('bull_case', '')}")
+        print(f"  Bear: {debate.get('bear_case', '')}")
+        print(f"  Disproof: {debate.get('what_would_prove_us_wrong', '')}")
+        print(f"  Better than weakest holding? {debate.get('better_than_weakest_holding', '')}")
+        print(f"  Trade/hold/observe: {debate.get('trade_hold_or_observe', '')}")
+        print(f"  Cost/risk: {debate.get('cost_risk_note', '')}")
+
     print(f"Routing: {result.routing.summary()}")
     if spy_return_pct is not None:
         print(f"SPY return this cycle: {spy_return_pct:.4f}")
@@ -704,6 +733,50 @@ def run_llm_routing_status() -> None:
     print(f"API key configured: {status['api_key_configured']}")
 
 
+def run_llm_review_status() -> None:
+    """Print which advisory LLM stages are enabled + model per stage. No secrets."""
+
+    status = review_status()
+    print("=== LLM advisory review agents (Phase 7P; model names only, no secrets) ===")
+    print(f"Provider: {status['provider']}")
+    print(f"API key configured: {status['api_key_configured']}")
+    print("Advisory stages (advisory only; deterministic risk remains authoritative):")
+    for name, info in status["stages"].items():
+        print(f"  {name}: enabled={info['enabled']} | model={info['model']}")
+
+
+def run_llm_daily_review(team: str | None = None) -> None:
+    """Daily review with optional LLM narrative + multi-day memory. Never submits orders.
+
+    Loads deterministic daily-spy-attribution, builds/persists the deterministic
+    daily review, optionally writes an LLM narrative, and rolls the result into the
+    ignored multi-day strategy memory under data/team_memory/.
+    """
+
+    teams = [team] if team else list(WEEK_TEAMS)
+    flags = LLMReviewFlags.from_env()
+    for tid in teams:
+        print(f"=== LLM daily review: {tid} (paper-only; advisory; submits NO orders) ===")
+        attribution = load_daily_spy_attribution(tid)
+        print(format_daily_spy_attribution(attribution))
+
+        # Deterministic daily review artifact (data/reviews/), then optional narrative.
+        review = export_daily_team_review(tid)
+        narrative = generate_daily_review_narrative(
+            team_id=tid, attribution=attribution, review=review, enabled=flags.daily_review
+        )
+        print(f"Daily review model: {narrative['model_used']} (source={narrative['source']})")
+        print(f"Narrative: {narrative.get('narrative', '')}")
+        if narrative.get("what_to_do_tomorrow"):
+            print(f"Tomorrow: {', '.join(narrative['what_to_do_tomorrow'])}")
+
+        # Roll into compact multi-day strategy memory (LLM-compressed when enabled).
+        memory = update_strategy_memory(tid, today_review=review, summary_enabled=flags.summary_agent)
+        print(format_strategy_memory(memory))
+        print(f"(Saved multi-day memory under data/team_memory/{tid}_strategy_memory.json)")
+        print("")
+
+
 def _cheap_loop_market_open() -> bool | None:
     """Best-effort read-only market-open check. None when undeterminable."""
 
@@ -726,6 +799,8 @@ def run_cheap_competition_loop(
     team: str = "both",
     market_hours_only: bool = True,
     run_review_only_when_skipped: bool = False,
+    llm_review_when_skipped: bool = False,
+    llm_daily_review_at_close: bool = False,
     dry_run_loop: bool = False,
     sleep_fn=None,
 ) -> None:
@@ -778,13 +853,32 @@ def run_cheap_competition_loop(
                     print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm")
                 else:
                     run_week_cycle_cli(team=tid, proposal_source="llm")
-            elif run_review_only_when_skipped:
+            elif run_review_only_when_skipped or llm_review_when_skipped:
+                # Gate skipped a full cycle: do advisory review-only + cheap LLM
+                # critique/summary stages. NEVER runs the expensive strategy model
+                # and NEVER submits orders.
                 if dry_run_loop:
                     print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
+                    if llm_review_when_skipped:
+                        print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
                 else:
                     run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                    if llm_review_when_skipped:
+                        try:
+                            run_llm_daily_review(team=tid)
+                        except Exception as exc:  # noqa: BLE001 - advisory step must not kill the loop
+                            print(f"({tid} llm-daily-review unavailable: {exc}; continuing loop)")
             else:
                 print(f"[{tid}] staying cheap this iteration (no full cycle).")
+
+        if llm_daily_review_at_close and market_hours_only and market_open is False:
+            if dry_run_loop:
+                print("[dry-run] would run: run-llm-daily-review (market closed; advisory, no orders)")
+            else:
+                try:
+                    run_llm_daily_review(team=None if team == "both" else team)
+                except Exception as exc:  # noqa: BLE001 - advisory close step must not kill the loop
+                    print(f"(llm-daily-review-at-close unavailable: {exc}; continuing loop)")
 
         if dry_run_loop:
             print("[dry-run] would run: export-team-scorecards")
@@ -1851,6 +1945,17 @@ def main() -> None:
         "llm-routing-status",
         help="Show task-specific LLM model routing (model names only; never secrets)",
     )
+    subparsers.add_parser(
+        "llm-review-status",
+        help="Show which advisory LLM review stages are enabled + model per stage (no secrets)",
+    )
+    llm_daily_review_parser = subparsers.add_parser(
+        "run-llm-daily-review",
+        help="Advisory LLM daily review + multi-day strategy memory (submits NO orders)",
+    )
+    llm_daily_review_parser.add_argument(
+        "--team", choices=WEEK_TEAMS, default=None, help="Optional team filter. Defaults to both teams."
+    )
     cheap_loop_parser = subparsers.add_parser(
         "run-cheap-competition-loop",
         help="Cost-saving runner: refresh + gate every interval; full LLM cycle only when the gate says so",
@@ -1874,6 +1979,17 @@ def main() -> None:
     cheap_loop_parser.add_argument(
         "--run-review-only-when-skipped", action="store_true",
         help="When the gate skips a full cycle, run a review-only cycle instead (advisory, no orders).",
+    )
+    cheap_loop_parser.add_argument(
+        "--llm-review-when-skipped", action="store_true",
+        help=(
+            "When the gate skips a full cycle, run review-only + cheap LLM advisory daily review "
+            "(critique/summary if enabled). Never runs the strategy model and never submits orders."
+        ),
+    )
+    cheap_loop_parser.add_argument(
+        "--llm-daily-review-at-close", action="store_true",
+        help="At market close, run the advisory LLM daily review (no orders). Optional.",
     )
     cheap_loop_parser.add_argument(
         "--dry-run-loop", action="store_true",
@@ -2013,6 +2129,10 @@ def main() -> None:
         run_export_daily_team_review(team=args.team)
     elif args.command == "llm-routing-status":
         run_llm_routing_status()
+    elif args.command == "llm-review-status":
+        run_llm_review_status()
+    elif args.command == "run-llm-daily-review":
+        run_llm_daily_review(team=args.team)
     elif args.command == "run-cheap-competition-loop":
         run_cheap_competition_loop(
             once=args.once,
@@ -2020,6 +2140,8 @@ def main() -> None:
             team=args.team,
             market_hours_only=args.market_hours_only,
             run_review_only_when_skipped=args.run_review_only_when_skipped,
+            llm_review_when_skipped=args.llm_review_when_skipped,
+            llm_daily_review_at_close=args.llm_daily_review_at_close,
             dry_run_loop=args.dry_run_loop,
         )
     elif args.command == "week-competition-status":

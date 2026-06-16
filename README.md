@@ -566,8 +566,9 @@ contents):
 python -m src.main llm-routing-status
 ```
 
-Model-routing env vars (the only live LLM call today is strategy/proposal generation, which uses
-`LLM_MODEL_STRATEGY`; the others are wired for when those paths become LLM-backed):
+Model-routing env vars. Strategy/proposal generation uses the (stronger) `LLM_MODEL_STRATEGY`; the
+advisory review agents (Phase 7P, below) use the cheaper `LLM_MODEL_REVIEW` / `LLM_MODEL_CRITIQUE` /
+`LLM_MODEL_SUMMARY` / `LLM_MODEL_PORTFOLIO_MANAGER` / `LLM_MODEL_RESEARCH_SYNTHESIS` models:
 
 ```env
 LLM_PROVIDER=openai
@@ -595,6 +596,54 @@ python -m src.main run-cheap-competition-loop --sleep-seconds 900 --run-review-o
 Cost savings come from (1) cheaper models on cheap tasks via routing and (2) the gate skipping full LLM
 cycles when nothing material changed. Keep your real `.env` untracked — only `.env.example` is committed,
 and API keys are never printed or logged.
+
+**LLM-backed advisory review agents (Phase 7P).** The routed cheaper models now actually back portfolio
+review, critique, summaries, daily reviews, and (optionally) research synthesis. These agents improve
+reasoning and written strategy quality — they are **advisory only** and never control execution. The
+deterministic risk engine and PortfolioManager remain authoritative: an advisory agent can narrow or warn
+but can never widen caps, unblock low-buying-power buys, bypass deterministic risk/review approvals,
+authorize options/spreads/naked options, or change team credentials / broker mode. If a stage is disabled
+or its provider fails, it falls back to deterministic text.
+
+Which stages are LLM-backed, and which model each uses (cheap vs strategy):
+
+| Stage | Flag (default) | Routed model | Role |
+| --- | --- | --- | --- |
+| Strategy / proposal generation | (always; `--proposal-source llm`) | `LLM_MODEL_STRATEGY` (strong) | generates proposals |
+| Trade / proposal critique | `ENABLE_LLM_CRITIQUE_AGENT=true` | `LLM_MODEL_CRITIQUE` (cheap) | advisory |
+| Daily review narrative | `ENABLE_LLM_DAILY_REVIEW=true` | `LLM_MODEL_REVIEW` (cheap) | advisory |
+| Review agent / team debate | `ENABLE_LLM_REVIEW_AGENT=true` | `LLM_MODEL_REVIEW`/`LLM_MODEL_CRITIQUE` (cheap) | advisory |
+| Strategy-memory compression | `ENABLE_LLM_SUMMARY_AGENT=true` | `LLM_MODEL_SUMMARY` (cheap) | advisory |
+| Advisory portfolio manager | `ENABLE_LLM_PORTFOLIO_MANAGER=false` | `LLM_MODEL_PORTFOLIO_MANAGER` | advisory (narrow-only) |
+| Research synthesis | `ENABLE_LLM_RESEARCH_SYNTHESIS=false` | `LLM_MODEL_RESEARCH_SYNTHESIS` (cheap) | advisory; no web search |
+
+Enable/disable each advisory stage independently in `.env` (portfolio manager + research synthesis
+default OFF because they are closest to trade decisions / least proven):
+
+```env
+ENABLE_LLM_PORTFOLIO_MANAGER=false
+ENABLE_LLM_REVIEW_AGENT=true
+ENABLE_LLM_CRITIQUE_AGENT=true
+ENABLE_LLM_SUMMARY_AGENT=true
+ENABLE_LLM_RESEARCH_SYNTHESIS=false
+ENABLE_LLM_DAILY_REVIEW=true
+```
+
+Inspect which advisory stages are on and their models (no secrets), and run the advisory daily review
+(deterministic SPY attribution → optional LLM narrative → compact multi-day strategy memory under the
+ignored `data/team_memory/`; it submits **no** orders):
+
+```bash
+python -m src.main llm-review-status
+python -m src.main run-llm-daily-review --team team_alpha   # or omit --team for both
+```
+
+The cheaper all-day loop can run these advisory stages when it skips a full cycle, still without ever
+running the strategy model or submitting orders:
+
+```bash
+python -m src.main run-cheap-competition-loop --llm-review-when-skipped --llm-daily-review-at-close
+```
 
 Safety: LLMs never place trades — they only produce proposals. The deterministic risk engine
 computes approved size; the kill-switch-guarded broker wrapper is the only path to a paper order.

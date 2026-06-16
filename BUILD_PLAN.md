@@ -1226,3 +1226,50 @@ Delivered:
 
 Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no new external
 web/search calls, no weakening of hard risk caps, no real OpenAI calls in tests.
+
+## Phase 7P - LLM-Backed Review Agents Using Routed Cheap Models
+
+Goal: actually use the routed cheaper models (Phase 7O) for portfolio review, critique, summaries,
+daily reviews, and research synthesis — to improve reasoning and written strategy quality — while the
+deterministic risk engine / PortfolioManager remain authoritative and every stage degrades to
+deterministic text.
+
+Delivered:
+
+- `src/agents/llm_review_agents.py` — advisory agents on routed models: `generate_trade_critique`
+  (`critique`), `generate_daily_review_narrative` (`review`/`summary`), `summarize_strategy_memory`
+  (`summary`), `synthesize_research_sources` (`research_synthesis`), `build_team_debate` /
+  `team_debate_context` (`critique`), and the advisory portfolio manager
+  (`generate_portfolio_manager_advice`/`merge_portfolio_advice`/`apply_llm_portfolio_manager`,
+  `portfolio_manager`). Every function accepts an injected/mock provider, tolerates malformed JSON +
+  provider failure, falls back to deterministic text when disabled or on error, and returns
+  `model_used`/`provider_used` metadata. `LLMReviewFlags` reads the per-stage `ENABLE_LLM_*` flags;
+  `review_status` reports enabled flags + model names + a key-configured bool only (never secrets).
+- Feature flags (`.env.example`): `ENABLE_LLM_PORTFOLIO_MANAGER=false`, `ENABLE_LLM_REVIEW_AGENT=true`,
+  `ENABLE_LLM_CRITIQUE_AGENT=true`, `ENABLE_LLM_SUMMARY_AGENT=true`, `ENABLE_LLM_RESEARCH_SYNTHESIS=false`,
+  `ENABLE_LLM_DAILY_REVIEW=true`. Portfolio manager + research synthesis default OFF (closest to trade
+  decisions / least-proven value); the cheap advisory stages default ON.
+- Portfolio manager safety: `merge_portfolio_advice` is NARROW-ONLY. The advisory PM may lower
+  `max_new_proposals_this_cycle`, force `no_trade`/`hold`, append warnings/risk notes, and add advisory
+  trims. It can never raise caps, unblock a deterministically blocked decision (e.g. low buying power),
+  bypass deterministic risk/review approvals, authorize options/spreads/naked options, or change team
+  credentials / broker mode. Proven by tests.
+- `src/learning/strategy_memory.py` — multi-day strategy memory (`data/team_memory/`, ignored) rolling
+  the daily reviews into `current_day_lessons`, `trailing_3_day_lessons`, `trailing_5_day_lessons`,
+  `week_to_date_lessons`, recurring winning/losing patterns, symbols/sectors to favor/avoid, strategy
+  adjustments for next cycle/tomorrow, `confidence_in_current_strategy`, `recommended_mode`
+  (exploration/conservation/reset), and `last_summary_model_used`. LLM-compressed with the summary model
+  when enabled; deterministic compact summary otherwise.
+- `build_llm_context` now includes a compact `strategy_memory` block and an advisory `team_debate`
+  (bull/bear, disproof, better-than-weakest-holding, trade/hold/observe, cost/risk, model used) when the
+  critique/review agents are enabled. Both are research feedback only.
+- CLI: `llm-review-status`; `run-llm-daily-review [--team]` (loads deterministic daily-spy-attribution,
+  optionally writes the LLM narrative, rolls multi-day memory, prints model used, submits NO orders);
+  `run-cheap-competition-loop` gains `--llm-review-when-skipped` and `--llm-daily-review-at-close`. When
+  the gate skips a full cycle and `--llm-review-when-skipped` is set, the loop runs review-only + the
+  cheap advisory daily review and never runs the strategy model or submits orders. `run-week-cycle`
+  prints a compact team debate when the critique/review agents are enabled.
+
+Non-goals (unchanged): no live trading, no model-weight training, no LLM broker access, no web/search,
+no weakening of hard risk caps, no real OpenAI calls in tests. Review agents advise only — they never
+control execution.
