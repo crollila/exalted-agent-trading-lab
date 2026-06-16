@@ -481,6 +481,8 @@ def _stub_loop_heavy(monkeypatch):
     monkeypatch.setattr(main, "run_export_team_scorecards", lambda *a, **k: None)
     monkeypatch.setattr(main, "run_week_cycle_cli", lambda *a, **k: None)
     monkeypatch.setattr(main, "routing_status", lambda *a, **k: {})
+    # Keep the loop hermetic: never touch the real Alpaca API for equity refresh.
+    monkeypatch.setattr(main, "_competition_equity_view", lambda teams: None)
 
     def _gate(tid):
         return (
@@ -611,3 +613,361 @@ def test_gather_context_degrades_safely(monkeypatch):
     assert ctx["team_id"] == "team_alpha"
     msg = build_team_iteration_update("team_alpha", ctx)
     assert "Paper-only" in msg
+
+
+# --- Phase 7S.3: live team paper equity overrides cached weekly state --------
+
+from src.competition.live_equity import (  # noqa: E402
+    CACHED_SOURCE_LABEL,
+    LIVE_SOURCE_LABEL,
+    refresh_competition_equity,
+    refresh_team_paper_equity,
+)
+from src.discord_bot.competition_updates import scoreboard_fingerprint  # noqa: E402
+
+PAPER_URL = "https://paper-api.alpaca.markets"
+
+# Plausible secret values that must never leak into any output.
+ALPHA_SECRET_VALUE = "ALPHA-SUPER-SECRET-VALUE-1234567890"
+BETA_SECRET_VALUE = "BETA-SUPER-SECRET-VALUE-0987654321"
+GLOBAL_SECRET_VALUE = "GLOBAL-SUPER-SECRET-VALUE-do-not-use"
+
+
+def _team_env(**overrides):
+    env = {
+        # Global creds present but intentionally NOT used for team scoreboards.
+        "ALPACA_API_KEY": "GLOBAL_KEY",
+        "ALPACA_SECRET_KEY": GLOBAL_SECRET_VALUE,
+        "ALPACA_PAPER": "true",
+        "ALPACA_BASE_URL": PAPER_URL,
+        "TEAM_ALPHA_ALPACA_API_KEY": "ALPHA_KEY",
+        "TEAM_ALPHA_ALPACA_SECRET_KEY": ALPHA_SECRET_VALUE,
+        "TEAM_ALPHA_ALPACA_PAPER": "true",
+        "TEAM_ALPHA_ALPACA_BASE_URL": PAPER_URL,
+        "TEAM_BETA_ALPACA_API_KEY": "BETA_KEY",
+        "TEAM_BETA_ALPACA_SECRET_KEY": BETA_SECRET_VALUE,
+        "TEAM_BETA_ALPACA_PAPER": "true",
+        "TEAM_BETA_ALPACA_BASE_URL": PAPER_URL,
+    }
+    env.update(overrides)
+    return env
+
+
+class _LiveAccount:
+    def __init__(self, equity):
+        self.equity = str(equity)
+        self.cash = str(equity)
+        self.buying_power = str(equity)
+
+
+class _AcctAPIError(Exception):
+    def __init__(self, status_code):
+        self.status_code = status_code
+        super().__init__(f"http {status_code}")
+
+
+def _acct_factory(equities, *, fail_keys=(), seen=None):
+    """Build a client_factory mapping api_key -> live equity (or a 401 failure)."""
+
+    def make(settings):
+        key = settings.alpaca_api_key
+        if seen is not None:
+            seen.append(key)
+
+        class _Client:
+            def get_account(self_inner):
+                if key in fail_keys:
+                    raise _AcctAPIError(401)
+                return _LiveAccount(equities[key])
+
+        return _Client()
+
+    return make
+
+
+class _Card:
+    """Scorecard-like object exposing both refresh and display fields."""
+
+    def __init__(self, *, current_equity, starting_equity, spy, excess):
+        self.current_equity = current_equity
+        self.starting_equity = starting_equity
+        self.spy_benchmark_return = spy
+        self.excess_return_vs_spy = excess
+        self.team_return = (current_equity - starting_equity) / starting_equity
+
+
+def _cached_cards():
+    # Cached local weekly state from the issue description.
+    return {
+        "team_alpha": _Card(current_equity=960825.40, starting_equity=1000000.0, spy=0.01, excess=-0.05),
+        "team_beta": _Card(current_equity=1008341.63, starting_equity=1000000.0, spy=0.01, excess=0.0083),
+    }
+
+
+def _patch_scorecards(monkeypatch, cards):
+    monkeypatch.setattr("src.competition.scorecard.load_latest_scorecard", lambda team_id: cards.get(team_id))
+
+
+def test_live_team_snapshots_override_cached_equity(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    view = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    assert view.all_live is True
+    assert view.source_label == LIVE_SOURCE_LABEL
+
+    msg = build_competition_iteration_summary(equity_view=view)
+    # Live equities shown; cached equities gone.
+    assert "$954,711.05" in msg
+    assert "$1,012,855.52" in msg
+    assert "$960,825.40" not in msg
+    assert "$1,008,341.63" not in msg
+    assert f"source: {LIVE_SOURCE_LABEL}" in msg
+    assert "(live)" in msg
+    # Leader uses live return/excess (Beta is up, Alpha is down).
+    assert "Leader: Team Beta" in msg
+
+
+def test_global_401_does_not_block_team_scoreboard_refresh(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    seen: list[str] = []
+    view = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        # Global key would 401 if ever used; teams must still read live.
+        client_factory=_acct_factory(
+            {"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52},
+            fail_keys=("GLOBAL_KEY",),
+            seen=seen,
+        ),
+    )
+    assert view.all_live is True
+    assert view.get("team_alpha").equity == 954711.05
+    assert view.get("team_beta").equity == 1012855.52
+    # The global key is never used for the team scoreboard.
+    assert "GLOBAL_KEY" not in seen
+    assert set(seen) == {"ALPHA_KEY", "BETA_KEY"}
+
+
+def test_one_team_live_failure_falls_back_and_labels_cached(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    view = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 0}, fail_keys=("BETA_KEY",)),
+    )
+    assert view.get("team_alpha").is_live is True
+    assert view.get("team_beta").is_live is False
+    assert view.all_live is False
+    assert view.source_label == CACHED_SOURCE_LABEL
+    # Beta falls back to its cached equity with a secret-free reason.
+    assert view.get("team_beta").equity == 1008341.63
+    assert view.get("team_beta").error == "unauthorized_401"
+
+    msg = build_competition_iteration_summary(equity_view=view)
+    assert "$954,711.05" in msg  # alpha live
+    assert "$1,008,341.63" in msg  # beta cached fallback
+    assert f"source: {CACHED_SOURCE_LABEL}" in msg
+    assert "(live)" in msg
+    assert "(cached: unauthorized_401)" in msg
+
+
+def test_summary_includes_source_and_snapshot_time(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    view = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    msg = build_competition_iteration_summary(equity_view=view)
+    assert f"source: {LIVE_SOURCE_LABEL}" in msg
+    assert "snapshot_time: " in msg
+    assert view.snapshot_time in msg
+
+
+def test_unchanged_scoreboard_is_skipped_changed_posts_again(monkeypatch, tmp_path, capsys):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    cfg = _cfg()
+    sender = FakeSender()
+    state = tmp_path / "state.json"
+
+    view1 = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    first = post_competition_iteration_summary(
+        config=cfg, sender=sender, equity_view=view1, state_path=state
+    )
+    assert first["sent"] is True
+
+    # Identical equity → unchanged → skipped (no new send).
+    view2 = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    second = post_competition_iteration_summary(
+        config=cfg, sender=sender, equity_view=view2, state_path=state
+    )
+    assert second["sent"] is False
+    assert second["reason"] == "unchanged scoreboard"
+    assert "[summary] skipped: unchanged scoreboard" in capsys.readouterr().out
+    assert len(sender.calls) == 1
+
+    # Changed equity → posts again.
+    view3 = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 955000.00, "BETA_KEY": 1012855.52}),
+    )
+    third = post_competition_iteration_summary(
+        config=cfg, sender=sender, equity_view=view3, state_path=state
+    )
+    assert third["sent"] is True
+    assert len(sender.calls) == 2
+
+
+def test_week_competition_status_shows_live_source(monkeypatch, capsys):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+
+    cached_status = {
+        "active": True,
+        "week_start": "2026-06-09T00:00:00+00:00",
+        "week_end": "2026-06-16T00:00:00+00:00",
+        "teams": [
+            {
+                "team_id": "team_alpha",
+                "current_equity": 960825.40,
+                "starting_equity": 1000000.0,
+                "spy_benchmark_return": 0.01,
+                "excess_return_vs_spy": -0.05,
+                "current_rank": 2,
+                "orders_submitted": 0,
+                "approved_count": 0,
+                "simulation_only_count": 0,
+                "rejected_count": 0,
+            },
+            {
+                "team_id": "team_beta",
+                "current_equity": 1008341.63,
+                "starting_equity": 1000000.0,
+                "spy_benchmark_return": 0.01,
+                "excess_return_vs_spy": 0.0083,
+                "current_rank": 1,
+                "orders_submitted": 0,
+                "approved_count": 0,
+                "simulation_only_count": 0,
+                "rejected_count": 0,
+            },
+        ],
+    }
+    monkeypatch.setattr(main, "competition_status", lambda: cached_status)
+    monkeypatch.setattr(main, "performance_feedback", lambda team_id: {})
+
+    main.run_week_competition_status(
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+        env=_team_env(),
+    )
+    out = capsys.readouterr().out
+    assert f"source: {LIVE_SOURCE_LABEL}" in out
+    assert "snapshot_time: " in out
+    assert "equity=954711.05" in out
+    assert "equity=1012855.52" in out
+    assert "[live]" in out
+    # No secret values printed.
+    assert ALPHA_SECRET_VALUE not in out
+    assert BETA_SECRET_VALUE not in out
+    assert GLOBAL_SECRET_VALUE not in out
+
+
+def test_week_competition_status_cached_when_live_unavailable(monkeypatch, capsys):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    cached_status = {
+        "active": True,
+        "week_start": None,
+        "week_end": None,
+        "teams": [
+            {
+                "team_id": "team_alpha",
+                "current_equity": 960825.40,
+                "starting_equity": 1000000.0,
+                "spy_benchmark_return": 0.01,
+                "excess_return_vs_spy": -0.05,
+                "current_rank": 1,
+                "orders_submitted": 0,
+                "approved_count": 0,
+                "simulation_only_count": 0,
+                "rejected_count": 0,
+            }
+        ],
+    }
+    monkeypatch.setattr(main, "competition_status", lambda: cached_status)
+    monkeypatch.setattr(main, "performance_feedback", lambda team_id: {})
+
+    # No env → team creds unconfigured → safe cached fallback (no network).
+    main.run_week_competition_status(env={})
+    out = capsys.readouterr().out
+    assert f"source: {CACHED_SOURCE_LABEL}" in out
+    assert "equity=960825.40" in out
+    assert "[cached" in out
+
+
+def test_refresh_team_equity_never_raises_and_redacts_reason():
+    # No env at all: must fall back to cached without raising or leaking secrets.
+    snap = refresh_team_paper_equity(
+        "team_alpha", cached_equity=123.0, starting_equity=100.0, env={}
+    )
+    assert snap.is_live is False
+    assert snap.equity == 123.0
+    assert snap.error == "credentials not configured for paper endpoint"
+
+
+def test_no_secrets_in_scoreboard_message(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    view = refresh_competition_equity(
+        ("team_alpha", "team_beta"),
+        cards=cards,
+        env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    msg = build_competition_iteration_summary(equity_view=view)
+    for secret in (ALPHA_SECRET_VALUE, BETA_SECRET_VALUE, GLOBAL_SECRET_VALUE):
+        assert secret not in msg
+
+
+def test_fingerprint_changes_with_equity(monkeypatch):
+    cards = _cached_cards()
+    _patch_scorecards(monkeypatch, cards)
+    view_a = refresh_competition_equity(
+        ("team_alpha", "team_beta"), cards=cards, env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 954711.05, "BETA_KEY": 1012855.52}),
+    )
+    view_b = refresh_competition_equity(
+        ("team_alpha", "team_beta"), cards=cards, env=_team_env(),
+        client_factory=_acct_factory({"ALPHA_KEY": 955000.00, "BETA_KEY": 1012855.52}),
+    )
+    fp_a = scoreboard_fingerprint(equity_view=view_a, kill_switch_engaged=False)
+    fp_b = scoreboard_fingerprint(equity_view=view_b, kill_switch_engaged=False)
+    assert fp_a != fp_b
+    assert fp_a["source"] == LIVE_SOURCE_LABEL
+    # Kill switch is part of the identity too.
+    fp_ks = scoreboard_fingerprint(equity_view=view_a, kill_switch_engaged=True)
+    assert fp_ks != fp_a

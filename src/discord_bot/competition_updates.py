@@ -662,44 +662,173 @@ def build_team_iteration_update(
     return "\n".join(lines)
 
 
+def _scoreboard_inputs(
+    teams: tuple[str, ...],
+    equity_view: Any | None,
+) -> dict[str, Any]:
+    """Resolve per-team equity/return/excess, preferring live snapshots.
+
+    A team's equity prefers its live snapshot (when available), otherwise the
+    cached scorecard. Per-team return/excess use the live snapshot only when that
+    team read live; otherwise the cached scorecard values. Leader ranking uses
+    live excess only when EVERY team read live (Phase 7S.3 requirement 6).
+    """
+
+    from src.competition.live_equity import CACHED_SOURCE_LABEL
+    from src.competition.scorecard import load_latest_scorecard
+
+    cards = {team_id: _safe(lambda team_id=team_id: load_latest_scorecard(team_id)) for team_id in teams}
+
+    def _snap(team_id: str) -> Any | None:
+        return equity_view.get(team_id) if equity_view is not None else None
+
+    both_live = equity_view is not None and getattr(equity_view, "all_live", False)
+    spy_return = None
+    per_team: dict[str, dict[str, Any]] = {}
+    for team_id in teams:
+        card = cards.get(team_id)
+        snap = _snap(team_id)
+        team_spy = getattr(card, "spy_benchmark_return", None) if card is not None else None
+        if team_spy is not None and spy_return is None:
+            spy_return = team_spy
+
+        if snap is not None and snap.equity is not None:
+            equity = snap.equity
+        else:
+            equity = getattr(card, "current_equity", None) if card is not None else None
+
+        if snap is not None and snap.is_live and snap.team_return is not None:
+            team_return = snap.team_return
+            excess = snap.excess_return_vs_spy(team_spy)
+            if excess is None:
+                excess = team_return
+        else:
+            team_return = getattr(card, "team_return", None) if card is not None else None
+            excess = getattr(card, "excess_return_vs_spy", None) if card is not None else None
+
+        # Leader ranking: only trust live excess when BOTH teams read live.
+        if both_live and snap is not None and snap.team_return is not None:
+            rank_excess = snap.excess_return_vs_spy(team_spy)
+            if rank_excess is None:
+                rank_excess = snap.team_return
+        else:
+            rank_excess = getattr(card, "excess_return_vs_spy", None) if card is not None else None
+
+        if snap is not None:
+            team_source = "live" if snap.is_live else "cached"
+            team_error = snap.error
+        elif card is not None:
+            team_source = "cached"
+            team_error = None
+        else:
+            team_source = None
+            team_error = None
+
+        per_team[team_id] = {
+            "has_data": card is not None or (snap is not None and snap.equity is not None),
+            "equity": equity,
+            "team_return": team_return,
+            "excess": excess,
+            "rank_excess": rank_excess,
+            "source": team_source,
+            "error": team_error,
+        }
+
+    overall_source = (
+        equity_view.source_label if equity_view is not None else CACHED_SOURCE_LABEL
+    )
+    snapshot_time = (
+        getattr(equity_view, "snapshot_time", None)
+        if equity_view is not None
+        else None
+    ) or datetime.now(timezone.utc).isoformat()
+
+    return {
+        "per_team": per_team,
+        "spy_return": spy_return,
+        "overall_source": overall_source,
+        "snapshot_time": snapshot_time,
+    }
+
+
+def scoreboard_fingerprint(
+    *,
+    teams: tuple[str, ...] = ("team_alpha", "team_beta"),
+    equity_view: Any | None = None,
+    kill_switch_engaged: bool = False,
+) -> dict[str, Any]:
+    """Stable identity of a scoreboard for skip-unchanged comparison.
+
+    Fields: overall source + each team's equity + SPY return + kill switch.
+    """
+
+    inputs = _scoreboard_inputs(teams, equity_view)
+    fingerprint: dict[str, Any] = {
+        "source": inputs["overall_source"],
+        "spy_return": inputs["spy_return"],
+        "kill_switch": bool(kill_switch_engaged),
+    }
+    for team_id in teams:
+        equity = inputs["per_team"].get(team_id, {}).get("equity")
+        fingerprint[f"{team_id}_equity"] = (
+            round(equity, 2) if isinstance(equity, (int, float)) else None
+        )
+    return fingerprint
+
+
 def build_competition_iteration_summary(
     *,
     teams: tuple[str, ...] = ("team_alpha", "team_beta"),
     kill_switch_engaged: bool = False,
     next_wake_seconds: int | None = None,
+    equity_view: Any | None = None,
 ) -> str:
-    """Build a compact Alpha-vs-Beta scoreboard summary from local scorecards."""
+    """Build a compact Alpha-vs-Beta scoreboard summary.
 
-    from src.competition.scorecard import load_latest_scorecard
+    When ``equity_view`` is provided, current team paper-account equity overrides
+    the cached scorecard equity (per team), the overall and per-team source is
+    labelled, and a freshness ``snapshot_time`` is shown. Without it, the cached
+    local weekly state is shown and labelled as such.
+    """
 
-    cards = {team_id: _safe(lambda team_id=team_id: load_latest_scorecard(team_id)) for team_id in teams}
+    inputs = _scoreboard_inputs(teams, equity_view)
+    per_team = inputs["per_team"]
 
-    def _excess(team_id: str) -> float | None:
-        card = cards.get(team_id)
-        return getattr(card, "excess_return_vs_spy", None) if card is not None else None
+    ranked = [t for t in teams if per_team.get(t, {}).get("has_data")]
 
-    ranked = [t for t in teams if cards.get(t) is not None]
-    ranked.sort(key=lambda t: (_excess(t) if _excess(t) is not None else float("-inf")), reverse=True)
+    def _rank_key(team_id: str) -> float:
+        value = per_team.get(team_id, {}).get("rank_excess")
+        return value if value is not None else float("-inf")
+
+    ranked.sort(key=_rank_key, reverse=True)
     leader = ranked[0] if ranked else None
 
     lines = ["Alpha vs Beta - Scoreboard (paper-only)"]
+    lines.append(f"source: {inputs['overall_source']}")
+    lines.append(f"snapshot_time: {inputs['snapshot_time']}")
     if leader is None:
         lines.append("Leader: n/a (no scorecards yet)")
     else:
-        lines.append(f"Leader: {_team_display(leader)} (excessVsSPY {_pct(_excess(leader))})")
-    spy_return = None
+        lines.append(
+            f"Leader: {_team_display(leader)} (excessVsSPY {_pct(per_team[leader]['rank_excess'])})"
+        )
     for team_id in teams:
-        card = cards.get(team_id)
-        if card is None:
+        data = per_team.get(team_id, {})
+        if not data.get("has_data"):
             lines.append(f"{_team_display(team_id)}: n/a")
             continue
-        spy_return = getattr(card, "spy_benchmark_return", None)
+        if data.get("source") == "live":
+            tag = " (live)"
+        elif data.get("error"):
+            tag = f" (cached: {data['error']})"
+        else:
+            tag = " (cached)"
         lines.append(
-            f"{_team_display(team_id)}: equity {_money(getattr(card, 'current_equity', None))}, "
-            f"return {_pct(getattr(card, 'team_return', None))}, "
-            f"excessVsSPY {_pct(getattr(card, 'excess_return_vs_spy', None))}"
+            f"{_team_display(team_id)}: equity {_money(data.get('equity'))}, "
+            f"return {_pct(data.get('team_return'))}, "
+            f"excessVsSPY {_pct(data.get('excess'))}{tag}"
         )
-    lines.append(f"SPY return: {_pct(spy_return)}")
+    lines.append(f"SPY return: {_pct(inputs['spy_return'])}")
     lines.append(f"Kill switch: {'ENGAGED' if kill_switch_engaged else 'off'} | Paper-only")
     if next_wake_seconds is not None:
         lines.append(f"Next scheduled wake: ~{int(next_wake_seconds)}s")
@@ -922,6 +1051,46 @@ def _mark_summary_posted_for_iteration(
     _write_state(state, state_path)
 
 
+def scoreboard_unchanged_since_last_post(
+    config: DiscordIterationUpdateConfig,
+    fingerprint: Mapping[str, Any],
+    *,
+    state_path: Path | str | None = None,
+) -> bool:
+    """True when ``fingerprint`` equals the last successfully posted scoreboard.
+
+    The fingerprint is ``source + Alpha equity + Beta equity + SPY return + kill
+    switch`` (see :func:`scoreboard_fingerprint`). Used to skip posting a
+    scoreboard that has not changed since the last one we actually sent.
+    """
+
+    state = load_update_state(state_path)
+    entry = state.get(_summary_dedup_key(config))
+    if not isinstance(entry, dict):
+        return False
+    last = entry.get("last_scoreboard_fingerprint")
+    if not isinstance(last, dict):
+        return False
+    return dict(last) == dict(fingerprint)
+
+
+def _store_scoreboard_fingerprint(
+    config: DiscordIterationUpdateConfig,
+    fingerprint: Mapping[str, Any],
+    *,
+    state_path: Path | str | None = None,
+    now: datetime | None = None,
+) -> None:
+    now = now or datetime.now(timezone.utc)
+    key = _summary_dedup_key(config)
+    state = load_update_state(state_path)
+    entry = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+    entry["last_scoreboard_fingerprint"] = dict(fingerprint)
+    entry["last_scoreboard_fingerprint_at"] = now.isoformat()
+    state[key] = entry
+    _write_state(state, state_path)
+
+
 def post_competition_iteration_summary(
     *,
     config: DiscordIterationUpdateConfig | None = None,
@@ -931,10 +1100,16 @@ def post_competition_iteration_summary(
     next_wake_seconds: int | None = None,
     teams: tuple[str, ...] = ("team_alpha", "team_beta"),
     iteration: int | None = None,
+    equity_view: Any | None = None,
     state_path: Path | str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build + (unless dry-run) post the Alpha-vs-Beta scoreboard summary.
+
+    When ``equity_view`` is provided, the scoreboard reflects current team paper
+    account equity (live snapshot) where available, labels the source, and skips
+    posting when the scoreboard is unchanged from the last one we sent (source +
+    Alpha equity + Beta equity + SPY return + kill switch all equal).
 
     Posts at most once per loop ``iteration`` per channel: pass the loop's
     iteration number and the summary will skip safely if it was already posted
@@ -944,7 +1119,10 @@ def post_competition_iteration_summary(
     config = config or DiscordIterationUpdateConfig.from_env()
     enabled = config.enabled and config.post_competition_summary
     message = build_competition_iteration_summary(
-        teams=teams, kill_switch_engaged=kill_switch_engaged, next_wake_seconds=next_wake_seconds
+        teams=teams,
+        kill_switch_engaged=kill_switch_engaged,
+        next_wake_seconds=next_wake_seconds,
+        equity_view=equity_view,
     )
     if dry_run:
         would = "would post" if enabled else "would NOT post (competition summary disabled)"
@@ -962,11 +1140,24 @@ def post_competition_iteration_summary(
             "message": message,
         }
 
+    # Skip-unchanged: only when we actually have a refreshed equity view to
+    # compare. Without one (pure cached preview), posting rules above apply.
+    fingerprint = None
+    if equity_view is not None:
+        fingerprint = scoreboard_fingerprint(
+            teams=teams, equity_view=equity_view, kill_switch_engaged=kill_switch_engaged
+        )
+        if scoreboard_unchanged_since_last_post(config, fingerprint, state_path=state_path):
+            print("[summary] skipped: unchanged scoreboard")
+            return {"sent": False, "reason": "unchanged scoreboard", "message": message}
+
     result = send_competition_iteration_summary(
         message, config=config, sender=sender, state_path=state_path, now=now
     )
     if result.get("sent"):
         _mark_summary_posted_for_iteration(config, iteration, state_path=state_path, now=now)
+        if fingerprint is not None:
+            _store_scoreboard_fingerprint(config, fingerprint, state_path=state_path, now=now)
     return result
 
 
@@ -1023,6 +1214,8 @@ __all__ = [
     "post_competition_iteration_summary",
     "post_team_iteration_update",
     "redact_secrets",
+    "scoreboard_fingerprint",
+    "scoreboard_unchanged_since_last_post",
     "send_competition_iteration_summary",
     "send_team_iteration_update",
     "should_post_for_action",

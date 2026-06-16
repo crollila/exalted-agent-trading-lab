@@ -65,6 +65,11 @@ from src.competition.scorecard import (
     export_scorecards_markdown,
     load_latest_scorecard,
 )
+from src.competition.live_equity import (
+    CACHED_SOURCE_LABEL,
+    LIVE_SOURCE_LABEL,
+    refresh_competition_equity,
+)
 from src.competition.week_competition import (
     WEEK_TEAMS,
     competition_status,
@@ -1013,6 +1018,23 @@ def _post_discord_iteration_update(
         print(f"(Discord iteration update failed for {team_id}: {exc}; continuing loop)")
 
 
+def _competition_equity_view(teams: tuple[str, ...]):
+    """Refresh current team paper-account equity for the scoreboard. Never raises.
+
+    Uses each team's OWN Alpaca paper credentials (never the global key). Any
+    failure (missing creds, 401, network) falls back to that team's cached
+    weekly equity, labelled accordingly. Returns ``None`` only if the whole
+    refresh helper is unavailable.
+    """
+
+    try:
+        cards = {team_id: load_latest_scorecard(team_id) for team_id in teams}
+        return refresh_competition_equity(tuple(teams), cards=cards)
+    except Exception as exc:  # noqa: BLE001 - scoreboard refresh must never crash the loop
+        print(f"(team paper equity refresh unavailable: {exc}; using cached weekly state)")
+        return None
+
+
 def _post_discord_competition_summary(
     *,
     config,
@@ -1024,8 +1046,10 @@ def _post_discord_competition_summary(
 ) -> None:
     """Post the optional Alpha-vs-Beta scoreboard summary. Never crashes the loop.
 
-    Posts at most once per loop ``iteration`` (the summary's own de-dup guard
-    skips a repeat in the same iteration), so a scoreboard is never spammed.
+    Refreshes current team paper-account equity first (live snapshot when
+    reachable, cached weekly state otherwise). Posts at most once per loop
+    ``iteration`` (the summary's own de-dup guard skips a repeat in the same
+    iteration), and skips entirely when the scoreboard is unchanged.
     """
 
     if config is None or not getattr(config, "enabled", False):
@@ -1033,12 +1057,14 @@ def _post_discord_competition_summary(
     try:
         from src.discord_bot.competition_updates import post_competition_iteration_summary
 
+        equity_view = _competition_equity_view(teams)
         post_competition_iteration_summary(
             config=config,
             iteration=iteration,
             kill_switch_engaged=kill_switch_engaged,
             next_wake_seconds=next_wake_seconds,
             teams=teams,
+            equity_view=equity_view,
             dry_run=dry_run,
         )
     except Exception as exc:  # noqa: BLE001 - Discord posting must never crash the loop
@@ -1094,10 +1120,14 @@ def run_discord_iteration_update(
         print(f"[{tid}] result: sent={result['sent']} reason={result['reason']}")
 
     if summary:
+        equity_view = _competition_equity_view(tuple(teams))
+        if equity_view is not None:
+            print(f"[summary] equity source: {equity_view.source_label}")
         result = post_competition_iteration_summary(
             config=config,
             kill_switch_engaged=ks.engaged,
             teams=tuple(teams),
+            equity_view=equity_view,
             dry_run=dry_run,
         )
         print(f"[summary] result: sent={result['sent']} reason={result['reason']}")
@@ -1105,7 +1135,7 @@ def run_discord_iteration_update(
     print("Paper-only. LLMs do not execute trades. Orders require deterministic gates.")
 
 
-def run_week_competition_status() -> None:
+def run_week_competition_status(*, client_factory=None, env=None) -> None:
     status = competition_status()
     print("=== Alpha vs Beta weekly competition status (paper-only) ===")
     print(f"Active: {status['active']}")
@@ -1115,18 +1145,76 @@ def run_week_competition_status() -> None:
     if not teams:
         print("No team scorecards yet. Run: python -m src.main run-week-cycle --team team_alpha")
         return
-    for card in teams:
+
+    # Phase 7S.3: refresh each team's CURRENT paper-account equity using its own
+    # credentials (never the global key). Falls back per team to cached weekly
+    # state, labelled as such, so a failure for one team can't blank the board.
+    team_ids = tuple(card["team_id"] for card in teams)
+    equity_view = refresh_competition_equity(
+        team_ids,
+        cards={card["team_id"]: card for card in teams},
+        client_factory=client_factory,
+        env=env,
+    )
+    print(f"source: {equity_view.source_label}")
+    print(f"snapshot_time: {equity_view.snapshot_time}")
+
+    # When both teams read live, recompute return/excess (and therefore the
+    # leaderboard) from the live snapshots; otherwise keep the cached ranking.
+    both_live = equity_view.all_live
+
+    def _display(card: dict) -> dict:
+        snap = equity_view.get(card["team_id"])
         spy = card.get("spy_benchmark_return")
-        excess = card.get("excess_return_vs_spy")
-        spy_text = "unknown" if spy is None else f"{spy:.4f}"
-        excess_text = "unknown" if excess is None else f"{excess:.4f}"
-        starting = card.get("starting_equity") or 0.0
-        team_return = (card["current_equity"] - starting) / starting if starting else 0.0
+        if snap is not None and snap.is_live and snap.team_return is not None:
+            equity = snap.equity
+            team_return = snap.team_return
+            excess = snap.excess_return_vs_spy(spy)
+            source = "live"
+            error = None
+        else:
+            starting = card.get("starting_equity") or 0.0
+            equity = card.get("current_equity")
+            team_return = (
+                (equity - starting) / starting if starting and equity is not None else 0.0
+            )
+            excess = card.get("excess_return_vs_spy")
+            source = "cached"
+            error = snap.error if snap is not None else None
+        return {
+            "equity": equity,
+            "team_return": team_return,
+            "excess": excess,
+            "spy": spy,
+            "source": source,
+            "error": error,
+        }
+
+    rows = [(card, _display(card)) for card in teams]
+    if both_live:
+        rows.sort(
+            key=lambda item: (
+                item[1]["excess"] if item[1]["excess"] is not None else item[1]["team_return"]
+            ),
+            reverse=True,
+        )
+
+    for rank, (card, view) in enumerate(rows, start=1):
+        display_rank = rank if both_live else card.get("current_rank")
+        spy_text = "unknown" if view["spy"] is None else f"{view['spy']:.4f}"
+        excess_text = "unknown" if view["excess"] is None else f"{view['excess']:.4f}"
+        equity_text = "unknown" if view["equity"] is None else f"{view['equity']:.2f}"
+        if view["source"] == "live":
+            tag = " [live]"
+        elif view["error"]:
+            tag = f" [cached: {view['error']}]"
+        else:
+            tag = " [cached]"
         print(
-            f"#{card.get('current_rank')} {card['team_id']}: return={team_return:.4f} "
-            f"equity={card['current_equity']:.2f} SPY={spy_text} excessVsSPY={excess_text} "
+            f"#{display_rank} {card['team_id']}: return={view['team_return']:.4f} "
+            f"equity={equity_text} SPY={spy_text} excessVsSPY={excess_text} "
             f"orders={card['orders_submitted']} approved={card['approved_count']} "
-            f"sim_only={card['simulation_only_count']} rejected={card['rejected_count']}"
+            f"sim_only={card['simulation_only_count']} rejected={card['rejected_count']}{tag}"
         )
         pm_type = card.get("portfolio_decision_type")
         if pm_type:
