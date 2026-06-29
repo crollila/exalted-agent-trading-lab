@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -3111,7 +3112,30 @@ def load_cli_dotenv() -> None:
         load_dotenv(dotenv_path=dotenv_path, override=False)
 
 
+def _configure_utf8_runtime_output() -> None:
+    """Force stdout/stderr to UTF-8 so redirected CLI output can never crash.
+
+    When the loop runs in the background its stdout/stderr are redirected to
+    ``data/runtime/cheap_loop.log``. Off a console, CPython picks the locale code
+    page (cp1252 on Windows), which cannot encode characters like ``≈`` and raises
+    ``UnicodeEncodeError`` mid-report. Reconfiguring both streams to UTF-8 with a
+    ``backslashreplace`` error policy keeps every Unicode symbol in reports while
+    guaranteeing output can never crash the loop. Idempotent and defensive; runs
+    before any other CLI output so all of it is protected.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # pragma: no cover - non-reconfigurable stream
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):  # pragma: no cover - detached/closed stream
+            pass
+
+
 def main() -> None:
+    _configure_utf8_runtime_output()
     load_cli_dotenv()
     parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
     subparsers = parser.add_subparsers(dest="command", required=True)

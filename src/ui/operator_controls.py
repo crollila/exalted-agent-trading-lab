@@ -18,6 +18,7 @@ Hard safety properties:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -99,6 +100,21 @@ def build_llm_daily_review_command(team: str = "both", *, python_executable: str
 def command_has_secret(command: list[str]) -> bool:
     joined = " ".join(command).upper()
     return any(marker in joined for marker in ("SECRET", "TOKEN", "API_KEY", "PASSWORD", "PASSWD"))
+
+
+def _utf8_child_env() -> dict[str, str]:
+    """Environment for background children so their redirected output stays UTF-8.
+
+    Mirrors the parent environment but forces Python UTF-8 mode and UTF-8 stdio so
+    the child's writes to the UTF-8 ``cheap_loop.log`` never fall back to the
+    Windows locale code page (cp1252) and crash on symbols like ``≈``. Set from
+    interpreter startup, this protects even output emitted before ``main()`` runs.
+    """
+
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +200,7 @@ def start_cheap_loop(
     log_path = cheap_loop_log_path(runtime)
     log_handle = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 - handed to child process
     try:
-        process = popen(command, stdout=log_handle, stderr=subprocess.STDOUT)
+        process = popen(command, stdout=log_handle, stderr=subprocess.STDOUT, env=_utf8_child_env())
     except Exception as exc:  # pragma: no cover - launch failure path
         log_handle.close()
         return BotActionResult(False, f"Failed to start cheap loop: {exc}")
