@@ -913,3 +913,18 @@ The three remaining integrations are now wired into the continuously-running loo
 Still **not** added: live trading, options/short/margin execution, buy-to-cover for
 shorts (existing shorts stay watch-only), LLM direct execution, and any automatic
 edits to `.env`, risk limits, or source code.
+
+### Daily notional cap (Phase 7Y)
+
+`MAX_DAILY_NOTIONAL_PER_TEAM` is now reconciled and enforced deterministically on
+the week/cheap loop before every paper order. Daily usage is computed from
+**submitted paper orders only** for the current ET trading date (broker
+authoritative, local attribution as a safe fallback — never LLM output);
+rejected/cancelled/expired/simulation-only/prior-day orders do not count. **Both
+entries and sell-to-close submissions count toward the cap** (one consistent
+turnover policy). An order is rejected when `daily_notional_today +
+next_order_notional` would exceed the cap, with the exact reason logged, and the
+running total updates after each submit so a later excess order in the same batch
+is blocked. `diagnose-competition-loop --team both` now prints
+`daily_notional_today / max_daily_notional_per_team`, `source`, and
+`reconciliation_status` (no secrets). See `docs/risk_policy.md`.

@@ -551,6 +551,7 @@ def run_week_cycle(
             client=client,
             dry_run=dry_run,
             kill_switch_path=kill_switch_path,
+            daily_notional_used=account.daily_notional_today,
         )
         submitted = sum(1 for r in execution_records if r.submitted)
         stage_log.append(f"Stage 7: execution path ran (dry_run={dry_run}); submitted={submitted}.")

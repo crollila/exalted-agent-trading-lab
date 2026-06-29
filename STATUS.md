@@ -505,6 +505,16 @@ Test environment fixed: `streamlit` (already in `requirements.txt`) is installed
 
 Not added (unchanged): live trading, options/short/margin execution, buy-to-cover for shorts, LLM direct execution, automatic `.env`/risk/code edits.
 
+## Phase 7Y - daily-notional reconciliation + enforcement
+
+`MAX_DAILY_NOTIONAL_PER_TEAM` is now reconciled and enforced on the week/cheap loop (previously the diagnostic printed "daily_notional: not tracked on the week-loop path"):
+
+- New `src/competition/daily_notional.py` (pure, credential-free): submitted-order filtering, gross-notional math, broker-vs-attribution reconciliation result, and the cap-enforcement helpers. `AlpacaClientWrapper.daily_notional_since` sums submitted-order notional (read-only). `_daily_notional_for_source` reconciles broker-first with a local-attribution fallback and reports `source`/`status`.
+- `AccountContext.daily_notional_today` added and populated; surfaced to the router, portfolio manager (via the shared context), sell-to-close path, and diagnostics.
+- Enforcement before every paper order: the router demotes over-cap entries to simulation; `execute_routed_proposals` and `execute_sell_to_close` re-check immediately before each submit and increment a running total after each success (post-submit reconciliation). Rejections log the exact cap reason.
+- Policy (one consistent everywhere): usage = gross notional of SUBMITTED paper orders for the current ET trading date; rejected/cancelled/expired/simulation-only/prior-day excluded; **both entries and sell-to-close count** toward the cap; LLM output is never the authority.
+- `diagnose-competition-loop` prints `daily_notional_today=$X / max_daily_notional_per_team=$Y`, `source=broker|local_fallback`, `reconciliation_status=ok|fallback|unavailable` (no secrets). Tests added; full suite green (1107 passed).
+
 ## Next step
 
 Run `diagnose-competition-loop --team both` to confirm the live blocker per team (currently `team_alpha=PYTHON_RISK_REJECTED` from exhausted buying power, `team_beta=MARKET_CLOSED`/healthy no-trade), reconcile or reset the over-leveraged `team_alpha` paper account if desired, then run the loop under `loop-watchdog` and inspect memory with `memory-status` / clean with `memory-maintenance --dry-run`. Only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.

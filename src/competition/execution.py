@@ -149,10 +149,32 @@ def execute_routed_proposals(
     client: AlpacaClientWrapper | None,
     dry_run: bool,
     kill_switch_path: str | None = None,
+    daily_notional_used: float = 0.0,
+    max_daily_notional: float | None = None,
 ) -> list[ExecutionRecord]:
-    """Execute a batch of execution-eligible proposals through the gated path."""
+    """Execute a batch of execution-eligible proposals through the gated path.
+
+    Phase 7Y: a final deterministic daily-notional gate runs immediately before
+    each real submission. ``daily_notional_used`` seeds the running total from the
+    broker-reconciled usage so far today; each successful submit increments it so
+    the next order sees updated usage (post-submit reconciliation). An order that
+    would exceed ``max_daily_notional`` is rejected (not submitted) with the exact
+    cap reason. Entries and sell-to-close share this cap and policy.
+    """
+
+    from src.competition.daily_notional import (
+        cap_rejection_reason,
+        proposal_order_notional,
+        would_exceed_cap,
+    )
+
+    if max_daily_notional is None:
+        from src.config.portfolio_limits import PortfolioLimits
+
+        max_daily_notional = PortfolioLimits.from_env().max_daily_notional_per_team
 
     records: list[ExecutionRecord] = []
+    running_used = float(daily_notional_used or 0.0)
 
     for routed in routed_proposals:
         proposal = routed.proposal
@@ -199,8 +221,27 @@ def execute_routed_proposals(
             )
             continue
 
+        # Phase 7Y: final daily-notional gate immediately before submission.
+        next_notional = proposal_order_notional(routed.decision, proposal)
+        if would_exceed_cap(running_used, next_notional, max_daily_notional):
+            reason = cap_rejection_reason(running_used, next_notional, max_daily_notional)
+            print(f"[risk] {symbol}: {reason}")
+            records.append(
+                ExecutionRecord(
+                    proposal_id=proposal.proposal_id,
+                    proposal_type=proposal.proposal_type.value,
+                    symbol=symbol,
+                    submitted=False,
+                    dry_run=False,
+                    detail=reason,
+                    failure_category="daily_notional_cap",
+                )
+            )
+            continue
+
         try:
             response = _dispatch(client, order)
+            running_used += next_notional  # reconcile so the next order sees updated usage
             records.append(
                 ExecutionRecord(
                     proposal_id=proposal.proposal_id,

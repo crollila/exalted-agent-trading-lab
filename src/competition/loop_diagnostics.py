@@ -79,7 +79,11 @@ class TeamLoopFacts:
     # Usage / caps.
     orders_today: int | None = None
     max_daily_orders_per_team: int = 3
-    daily_notional_note: str = "not tracked on the week-loop path"
+    # Phase 7Y: reconciled daily notional usage vs the configured cap.
+    daily_notional_today: float | None = None
+    max_daily_notional_per_team: float | None = None
+    daily_notional_source: str | None = None            # broker | local_fallback | unavailable
+    daily_notional_reconciliation_status: str | None = None  # ok | fallback | unavailable
     # Cheap-gate decision (advisory; deterministic).
     gate_should_run_full_cycle: bool = True
     gate_recommend_review_only: bool = False
@@ -311,7 +315,11 @@ def format_team_report(facts: TeamLoopFacts, diagnosis: TeamDiagnosis) -> str:
 
     lines.append("Daily usage vs caps (ET trading date):")
     lines.append(f"  orders_today={_fmt(facts.orders_today)} / max_daily_orders_per_team={facts.max_daily_orders_per_team}")
-    lines.append(f"  daily_notional: {facts.daily_notional_note}")
+    _dn = "n/a" if facts.daily_notional_today is None else f"${facts.daily_notional_today:,.2f}"
+    _dncap = "n/a" if facts.max_daily_notional_per_team is None else f"${facts.max_daily_notional_per_team:,.2f}"
+    lines.append(f"  daily_notional_today={_dn} / max_daily_notional_per_team={_dncap}")
+    lines.append(f"  source={facts.daily_notional_source or 'unavailable'}")
+    lines.append(f"  reconciliation_status={facts.daily_notional_reconciliation_status or 'unavailable'}")
 
     lines.append("Cheap cycle gate (deterministic; no LLM):")
     lines.append(f"  should_run_full_cycle={facts.gate_should_run_full_cycle} "

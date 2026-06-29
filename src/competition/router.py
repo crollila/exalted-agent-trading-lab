@@ -46,10 +46,33 @@ class RoutingResult:
         }
 
 
+def _demote(routed: RoutedProposal, note: str) -> RoutedProposal:
+    """Return a copy of ``routed`` re-routed to simulation_only with ``note``."""
+
+    d = routed.decision
+    return RoutedProposal(
+        proposal=routed.proposal,
+        decision=AdvancedRiskDecision(
+            proposal_id=d.proposal_id,
+            proposal_type=d.proposal_type,
+            level=d.level,
+            route=Route.SIMULATION_ONLY,
+            approved=False,
+            reasons=[note],
+            approved_quantity=d.approved_quantity,
+            approved_contracts=d.approved_contracts,
+            approved_notional=d.approved_notional,
+            premium_at_risk=d.premium_at_risk,
+        ),
+    )
+
+
 def route_proposals(
     proposals: list[CompetitionProposal],
     permissions: TradingPermissions,
     account: AccountContext,
+    *,
+    max_daily_notional_per_team: float | None = None,
 ) -> RoutingResult:
     execution: list[RoutedProposal] = []
     simulation: list[RoutedProposal] = []
@@ -70,26 +93,43 @@ def route_proposals(
     remaining = max(permissions.max_daily_orders_per_team - account.orders_today, 0)
     if len(execution) > remaining:
         execution.sort(key=lambda r: r.proposal.confidence, reverse=True)
-        kept = execution[:remaining]
-        demoted = execution[remaining:]
-        for routed in demoted:
-            note = (
+        for routed in execution[remaining:]:
+            simulation.append(_demote(
+                routed,
                 f"Simulation only: team daily order cap reached "
-                f"({permissions.max_daily_orders_per_team})."
-            )
-            new_decision = AdvancedRiskDecision(
-                proposal_id=routed.decision.proposal_id,
-                proposal_type=routed.decision.proposal_type,
-                level=routed.decision.level,
-                route=Route.SIMULATION_ONLY,
-                approved=False,
-                reasons=[note],
-                approved_quantity=routed.decision.approved_quantity,
-                approved_contracts=routed.decision.approved_contracts,
-                approved_notional=routed.decision.approved_notional,
-                premium_at_risk=routed.decision.premium_at_risk,
-            )
-            simulation.append(RoutedProposal(proposal=routed.proposal, decision=new_decision))
+                f"({permissions.max_daily_orders_per_team}).",
+            ))
+        execution = execution[:remaining]
+
+    # Enforce the per-team daily NOTIONAL cap deterministically (Phase 7Y): walk the
+    # surviving execution-eligible proposals highest-confidence first, accumulating
+    # the already-used daily notional, and demote any that would push the team over
+    # MAX_DAILY_NOTIONAL_PER_TEAM. Entries counted here; sell-to-close is enforced on
+    # its own submission path with the same cap and policy.
+    if max_daily_notional_per_team is None:
+        from src.config.portfolio_limits import PortfolioLimits
+
+        max_daily_notional_per_team = PortfolioLimits.from_env().max_daily_notional_per_team
+
+    if max_daily_notional_per_team and max_daily_notional_per_team > 0:
+        from src.competition.daily_notional import (
+            cap_rejection_reason,
+            proposal_order_notional,
+            would_exceed_cap,
+        )
+
+        execution.sort(key=lambda r: r.proposal.confidence, reverse=True)
+        used = float(account.daily_notional_today or 0.0)
+        kept: list[RoutedProposal] = []
+        for routed in execution:
+            nxt = proposal_order_notional(routed.decision, routed.proposal)
+            if would_exceed_cap(used, nxt, max_daily_notional_per_team):
+                simulation.append(_demote(
+                    routed, cap_rejection_reason(used, nxt, max_daily_notional_per_team)
+                ))
+            else:
+                used += nxt
+                kept.append(routed)
         execution = kept
 
     return RoutingResult(

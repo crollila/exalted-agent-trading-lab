@@ -1561,3 +1561,40 @@ Non-goals (unchanged): no live trading; no options/short/margin execution; no bu
 (existing shorts stay watch-only); sell-to-close reduces/closes existing long stock only and
 is capped to refreshed held qty; LLMs recommend, deterministic Python decides; no automatic
 edits to `.env`, risk limits, or source.
+
+## Phase 7Y - Daily-notional reconciliation + enforcement
+
+Goal: deterministically reconcile and enforce `MAX_DAILY_NOTIONAL_PER_TEAM` before
+every paper entry and sell-to-close on the week/cheap loop, from submitted paper
+orders only (never LLM output). No new execution surfaces.
+
+Delivered:
+
+- `src/competition/daily_notional.py` - pure, credential-free helpers: submitted-
+  order status filter (excludes rejected/cancelled/expired/replaced/suspended/
+  failed), per-order gross-notional math, `daily_notional_from_orders` /
+  `daily_notional_from_attribution` (ET-scoped fallback), `proposal_order_notional`
+  / `sell_to_close_notional`, `would_exceed_cap` / `cap_rejection_reason`, and a
+  `NotionalReconciliation(used, source, status)` result.
+- `AlpacaClientWrapper.daily_notional_since` (read-only) sums submitted-order
+  notional; `main._daily_notional_for_source` reconciles broker-first with a local
+  attribution fallback.
+- `AccountContext.daily_notional_today` added + populated in
+  `_account_context_for_source`; surfaced to router / portfolio manager / sell-to-
+  close / diagnostics.
+- Enforcement: `route_proposals` demotes over-cap entries to simulation_only;
+  `execute_routed_proposals` and `execute_sell_to_close` gate each order with a
+  running total seeded from reconciled usage and incremented post-submit. Exact cap
+  reason logged everywhere.
+- Diagnostic prints `daily_notional_today / max_daily_notional_per_team`, `source`,
+  `reconciliation_status` (no secrets).
+- Tests: `tests/test_daily_notional.py` - current-day counts, prior-day excluded,
+  rejected/cancelled excluded, next-order-exceeds-cap rejected, post-submit running
+  total blocks subsequent excess, sell-to-close counts toward the cap, broker
+  `after`-scoping, no credentials required, diagnostics secret-free.
+
+Policy (consistent everywhere): daily notional = gross dollars of SUBMITTED paper
+orders for the current ET trading date; BOTH entries and sell-to-close count;
+rejected/cancelled/simulation-only/prior-day excluded; broker is authoritative with
+local attribution as fallback; LLM output is never the usage authority. No live/
+options/short/margin execution and no settings/code changes were added.

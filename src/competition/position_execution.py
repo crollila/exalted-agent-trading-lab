@@ -199,6 +199,16 @@ def build_sell_to_close_order(decision: SellToCloseDecision, *, dry_run: bool) -
     )
 
 
+def _position_price(symbol: str, positions: list[Any]) -> float | None:
+    """Current price (fallback: avg entry) for ``symbol`` from refreshed positions."""
+
+    for raw in positions:
+        f = read_position_fields(raw)
+        if f["symbol"] == symbol.upper():
+            return f["current_price"] or f["avg_entry_price"]
+    return None
+
+
 def execute_sell_to_close(
     proposals: list[PositionActionProposal],
     *,
@@ -207,17 +217,28 @@ def execute_sell_to_close(
     limits: PortfolioLimits,
     refresh_positions: Callable[[], list[Any]],
     kill_switch_path: str | None = None,
+    daily_notional_used: float = 0.0,
 ) -> list[SellToCloseRecord]:
     """Validate + execute sell-to-close reductions, refreshing positions per order.
 
     ``refresh_positions`` is called immediately before each order so the cap is
-    always re-validated against the latest broker-held quantity. Best-effort and
-    fully logged; never fakes a fill.
+    always re-validated against the latest broker-held quantity. Phase 7Y: a
+    sell-to-close also counts toward ``MAX_DAILY_NOTIONAL_PER_TEAM`` (one consistent
+    policy with entries); ``daily_notional_used`` seeds the running total and each
+    successful submit increments it. Best-effort and fully logged; never fakes a fill.
     """
+
+    from src.competition.daily_notional import (
+        cap_rejection_reason,
+        sell_to_close_notional,
+        would_exceed_cap,
+    )
 
     records: list[SellToCloseRecord] = []
     trims = 0
     exits = 0
+    running_used = float(daily_notional_used or 0.0)
+    cap = limits.max_daily_notional_per_team
 
     for proposal in proposals:
         # Refresh positions immediately before deciding/submitting this order so a
@@ -267,8 +288,24 @@ def execute_sell_to_close(
             ))
             continue
 
+        # Phase 7Y: final daily-notional gate immediately before submission. A
+        # sell-to-close counts toward the same per-team cap as entries.
+        next_notional = sell_to_close_notional(
+            decision.approved_qty, _position_price(decision.symbol, positions)
+        )
+        if would_exceed_cap(running_used, next_notional, cap):
+            reason = cap_rejection_reason(running_used, next_notional, cap)
+            records.append(SellToCloseRecord(
+                symbol=decision.symbol, action=proposal.action,
+                requested_qty=proposal.requested_qty, approved_qty=decision.approved_qty,
+                submitted=False, dry_run=False,
+                detail="Rejected by deterministic risk: " + reason,
+            ))
+            continue
+
         try:
             client.submit_paper_sell_to_close_order(order)
+            running_used += next_notional  # reconcile so the next order sees updated usage
             records.append(SellToCloseRecord(
                 symbol=decision.symbol, action=proposal.action,
                 requested_qty=proposal.requested_qty, approved_qty=decision.approved_qty,

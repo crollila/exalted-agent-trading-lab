@@ -36,6 +36,32 @@ direction added, and it is deliberately narrow:
 
 **No shorting, options execution, margin execution, or live trading was added by
 this phase.** The deterministic risk engine and kill switch remain authoritative.
+
+## Daily notional cap (Phase 7Y)
+
+`MAX_DAILY_NOTIONAL_PER_TEAM` is enforced deterministically on the week/cheap
+competition loop before every paper order.
+
+- **Usage is reconciled from SUBMITTED paper orders only** — never from LLM output.
+  Broker order data is the authority; locally-persisted attribution records are a
+  safe fallback when the broker is unavailable.
+- **What counts:** gross dollar notional of submitted orders for the current
+  America/New_York trading date. Rejected, cancelled, expired, replaced,
+  suspended/failed, simulation-only, and prior-day orders **do not count**.
+- **Entries vs sell-to-close — one consistent policy:** **both** new stock-long
+  entries **and** sell-to-close (trim/exit) submissions count toward the cap. It is
+  a churn/turnover control on gross dollars transacted per day, not a net-exposure
+  measure. (No documented exemption exists for sell-to-close, so it is counted, the
+  same way everywhere.)
+- **Enforcement:** a new order is rejected when
+  `daily_notional_today + next_order_notional > MAX_DAILY_NOTIONAL_PER_TEAM`, with
+  the exact cap reason logged. The router demotes over-cap entries to
+  simulation-only; the execution paths re-check immediately before each submission
+  and increment a running total after each success, so a subsequent excess order in
+  the same batch is blocked. `diagnose-competition-loop` prints
+  `daily_notional_today / max_daily_notional_per_team`, `source=broker|local_fallback`,
+  and `reconciliation_status=ok|fallback|unavailable` (no secrets).
+
 - Max 5 new positions per day (legacy local runner); competition cap is `MAX_DAILY_ORDERS_PER_TEAM`.
 - Max 30% daily turnover (legacy local runner).
 

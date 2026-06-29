@@ -115,6 +115,25 @@ class AlpacaClientWrapper:
         orders = self._get_client().get_orders(filter=request)
         return len(list(orders or []))
 
+    def daily_notional_since(self, after: "datetime") -> float:
+        """Sum gross submitted-order notional at/after ``after`` (read-only).
+
+        Reconciles the per-team daily-notional cap from actual paper orders.
+        Excludes rejected/cancelled/expired/failed orders. Never submits.
+        """
+
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        # Order-status filtering + notional math live in the competition layer so
+        # they stay broker-credential-free and unit-testable (lazy import avoids a
+        # module-load cycle).
+        from src.competition.daily_notional import daily_notional_from_orders
+
+        request = GetOrdersRequest(status=QueryOrderStatus.ALL, after=after, limit=500)
+        orders = self._get_client().get_orders(filter=request)
+        return float(daily_notional_from_orders(list(orders or [])))
+
     def submit_paper_order(self, order_request: OrderRequest) -> Any:
         """Submit a paper long stock order (existing Level 1 path)."""
 

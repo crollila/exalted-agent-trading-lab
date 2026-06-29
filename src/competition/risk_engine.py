@@ -44,6 +44,10 @@ class AccountContext:
     current_short_exposure: float = 0.0
     daily_loss_pct: float = 0.0
     orders_today: int = 0
+    # Gross paper notional already submitted for the current ET trading date
+    # (entries + sell-to-close), reconciled from broker orders. Used to enforce
+    # MAX_DAILY_NOTIONAL_PER_TEAM before each new order.
+    daily_notional_today: float = 0.0
     as_of: date | None = None
 
 

@@ -256,6 +256,39 @@ def _orders_today_for_source(source: str, settings: Settings) -> int:
         return 0
 
 
+def _daily_notional_for_source(source: str, settings: Settings):
+    """Reconcile this team's gross paper notional for the current ET trading date.
+
+    Returns a ``NotionalReconciliation`` (used, source, status). Broker submitted
+    orders are the authority; locally-persisted attribution records are a safe
+    fallback when the broker is unavailable. Never uses LLM output as authority,
+    never submits, and degrades to (0.0, unavailable) rather than crashing.
+    """
+
+    from src.competition.daily_notional import (
+        NotionalReconciliation,
+        daily_notional_from_attribution,
+    )
+
+    # 1) Broker-authoritative path.
+    try:
+        client = client_for_source(source, base_settings=settings)
+        if client is not None and client.has_credentials():
+            used = float(client.daily_notional_since(ny_session_start_utc()))
+            return NotionalReconciliation(used=used, source="broker", status="ok")
+    except Exception as exc:  # noqa: BLE001 - fall through to the local fallback
+        print(f"({source} daily-notional broker reconciliation unavailable: {exc}; trying local records.)")
+
+    # 2) Local persisted attribution fallback (still submitted-only, ET-scoped).
+    try:
+        entries = load_team_attribution(source)
+        used = float(daily_notional_from_attribution(entries))
+        return NotionalReconciliation(used=used, source="local_fallback", status="fallback")
+    except Exception as exc:  # noqa: BLE001 - last resort: report unavailable, fail safe-open
+        print(f"({source} daily-notional local fallback unavailable: {exc}; assuming 0.)")
+        return NotionalReconciliation(used=0.0, source="unavailable", status="unavailable")
+
+
 def _account_context_for_source(
     source: str, settings: Settings, *, reconcile_orders: bool = True
 ) -> "AccountContext":
@@ -271,6 +304,9 @@ def _account_context_for_source(
     """
 
     orders_today = _orders_today_for_source(source, settings) if reconcile_orders else 0
+    daily_notional_today = (
+        _daily_notional_for_source(source, settings).used if reconcile_orders else 0.0
+    )
     diagnosis = diagnose_source(source, base_settings=settings)
     if diagnosis.auth_ok and diagnosis.account:
         try:
@@ -279,6 +315,7 @@ def _account_context_for_source(
                 cash=float(diagnosis.account["cash"]),
                 buying_power=float(diagnosis.account["buying_power"]),
                 orders_today=orders_today,
+                daily_notional_today=daily_notional_today,
                 as_of=ny_trading_date(),
             )
         except (TypeError, ValueError, KeyError):
@@ -292,6 +329,7 @@ def _account_context_for_source(
         cash=settings.starting_equity,
         buying_power=settings.starting_equity * 2.0,
         orders_today=orders_today,
+        daily_notional_today=daily_notional_today,
         as_of=ny_trading_date(),
     )
 
@@ -902,6 +940,7 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
 
     from src.competition.loop_diagnostics import TeamLoopFacts
     from src.competition.iteration_audit import latest_status_age_seconds
+    from src.config.portfolio_limits import PortfolioLimits
     from src.research.data_tools import alpaca_positions
 
     permissions = TradingPermissions.from_env()
@@ -943,6 +982,8 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
         low_bp = (bp_for_ratio / equity) < low_bp_threshold
 
     orders_today = _orders_today_for_source(team, settings) if account_ok else None
+    notional_recon = _daily_notional_for_source(team, settings) if account_ok else None
+    pl_config = PortfolioLimits.from_env()
 
     decision, _ = _evaluate_team_cheap_gate(team)
 
@@ -990,6 +1031,10 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
         low_bp_threshold_pct=low_bp_threshold,
         orders_today=orders_today,
         max_daily_orders_per_team=permissions.max_daily_orders_per_team,
+        daily_notional_today=(notional_recon.used if notional_recon else None),
+        max_daily_notional_per_team=pl_config.max_daily_notional_per_team,
+        daily_notional_source=(notional_recon.source if notional_recon else None),
+        daily_notional_reconciliation_status=(notional_recon.status if notional_recon else None),
         gate_should_run_full_cycle=decision.should_run_full_cycle,
         gate_recommend_review_only=decision.recommend_review_only,
         gate_reason=decision.reason,
@@ -1824,9 +1869,13 @@ def _run_portfolio_management(
             print(f"({tid} sell-to-close broker unavailable: {exc}; recommendations only)")
             client = None
 
+    # Seed the daily-notional gate with today's reconciled usage so sell-to-close
+    # submissions count toward MAX_DAILY_NOTIONAL_PER_TEAM (same policy as entries).
+    notional_used = _daily_notional_for_source(tid, settings).used if not submit_dry else 0.0
     records = execute_sell_to_close(
         proposals, client=client, dry_run=submit_dry, limits=limits,
         refresh_positions=lambda: _gather_team_positions(tid, settings),
+        daily_notional_used=notional_used,
     )
     result["submitted"] = sum(1 for r in records if r.submitted)
     result["eligible"] = any(not r.detail.startswith("Rejected by deterministic risk") for r in records)
