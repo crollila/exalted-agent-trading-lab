@@ -11,6 +11,7 @@ from src.competition.loop_watchdog import (
     assess_loop_health,
     run_watchdog_once,
 )
+from src.ui.process_control import BotActionResult
 
 NOW = datetime(2026, 6, 29, 15, 0, tzinfo=timezone.utc)
 
@@ -147,6 +148,41 @@ def test_watchdog_starter_is_only_side_effect():
         starter=boom, now=NOW,
     )
     assert result.restarted is False and result.action == "restart_error"
+
+
+def test_watchdog_treats_botactionresult_ok_true_as_restart():
+    # start_cheap_loop returns BotActionResult whose success flag is named `ok`.
+    # A real successful launch must read as a restart (not restart_failed) and
+    # surface the launched PID for the operator.
+    def starter():
+        return BotActionResult(True, "Started cheap loop (PID 23184).", 23184)
+
+    result = run_watchdog_once(
+        health=_dead_health(), kill_switch_engaged=False, detected_duplicates=[],
+        starter=starter, now=NOW,
+    )
+    assert result.action == "restart" and result.restarted is True
+    assert "23184" in result.detail
+
+
+def test_watchdog_treats_botactionresult_ok_false_as_restart_failed():
+    def starter():
+        return BotActionResult(False, "Cheap loop already appears to be running (PID 99).", 99)
+
+    result = run_watchdog_once(
+        health=_dead_health(), kill_switch_engaged=False, detected_duplicates=[],
+        starter=starter, now=NOW,
+    )
+    assert result.action == "restart_failed" and result.restarted is False
+
+
+def test_watchdog_supports_legacy_success_stub():
+    # Older stubs expose `.success` rather than `.ok`; both must keep working.
+    result = run_watchdog_once(
+        health=_dead_health(), kill_switch_engaged=False, detected_duplicates=[],
+        starter=lambda: SimpleNamespace(success=True, message="started"), now=NOW,
+    )
+    assert result.action == "restart" and result.restarted is True
 
 
 def test_no_secrets_in_health_or_watchdog_result():

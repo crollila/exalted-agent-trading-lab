@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import src.main as main_mod
 from src.competition.loop_watchdog import LoopHealth, assess_loop_health
 from src.ui import operator_controls as ops
+from src.ui.process_control import BotActionResult
 
 
 def _dead_health() -> LoopHealth:
@@ -68,6 +69,30 @@ def test_watchdog_restart_non_dry_run_uses_current_python(monkeypatch, capsys):
     assert "action=restart " in out and "restarted=True" in out
     assert "restart_error" not in out
     assert "name 'sys' is not defined" not in out
+
+
+def test_watchdog_restart_reports_success_with_real_botactionresult(monkeypatch, capsys):
+    """End-to-end: a real ``BotActionResult(ok=True)`` from ``start_cheap_loop``
+    must report ``action=restart`` / ``restarted=True`` with the PID in the detail.
+
+    The earlier integration test used a ``success=``-style stub, which hid the
+    field-name mismatch that made a genuine launch look like ``restart_failed``.
+    """
+
+    def fake_start_cheap_loop(**_kwargs):
+        return BotActionResult(True, "Started cheap loop (PID 23184).", 23184)
+
+    _wire_watchdog(
+        monkeypatch, health=_dead_health(), kill_switch_engaged=False,
+        duplicates=[], starter=fake_start_cheap_loop,
+    )
+
+    main_mod.run_loop_watchdog(team="both", sleep_seconds=900, once=True, dry_run=False)
+
+    out = capsys.readouterr().out
+    assert "action=restart " in out and "restarted=True" in out
+    assert "restart_failed" not in out
+    assert "PID 23184" in out  # operator sees the launched PID, not a false failure
 
 
 def test_watchdog_dry_run_does_not_spawn(monkeypatch, capsys):

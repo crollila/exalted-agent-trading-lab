@@ -113,6 +113,21 @@ class WatchdogResult:
         return asdict(self)
 
 
+def _starter_succeeded(result: Any) -> bool:
+    """True when the loop starter reported a successful launch.
+
+    ``start_cheap_loop`` returns a :class:`~src.ui.process_control.BotActionResult`
+    whose success flag is named ``ok``; older test stubs use ``success``. Accept
+    either (preferring the real ``ok`` field) so a genuine launch is never
+    misreported as a failure.
+    """
+
+    for attr in ("ok", "success"):
+        if hasattr(result, attr):
+            return bool(getattr(result, attr))
+    return False
+
+
 def run_watchdog_once(
     *,
     health: LoopHealth,
@@ -149,7 +164,9 @@ def run_watchdog_once(
 
     try:
         result = starter()
-        ok = bool(getattr(result, "success", False))
+        ok = _starter_succeeded(result)
+        # ``message`` already carries the launched PID (e.g. "Started cheap loop
+        # (PID 23184).") so a successful restart surfaces it to the operator.
         msg = getattr(result, "message", str(result))
         return WatchdogResult(iso, True, ok, "restart" if ok else "restart_failed", msg, health.as_dict())
     except Exception as exc:  # noqa: BLE001 - a spawn failure is logged, never fatal
