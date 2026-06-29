@@ -1388,3 +1388,176 @@ Non-goals (unchanged): no live trading, no new broker execution path, LLMs summa
 do not execute orders, no secrets posted, no weakening of any safety gate. Quiet mode only *suppresses*
 work; the Tomorrow Plan only *reads* and *reports*. The deterministic risk engine and kill switch
 remain authoritative.
+
+## Phase 7U - Loop observability + daily-order reconciliation
+
+Goal: make the continuous paper loop's no-trade behavior diagnosable and fix the
+reliability bug that let a single busy session exhaust buying power, without
+adding any execution path or weakening a gate.
+
+Delivered:
+
+- `src/competition/market_time.py` — shared America/New_York helpers (`now_utc`,
+  `to_ny`, `ny_trading_date`, `ny_session_start_utc`) so "today" is unambiguous.
+- `AlpacaClientWrapper.get_clock_snapshot()` / `count_orders_since()` — read-only
+  broker GETs (clock with next open/close; today's order count). Never submit.
+- `_account_context_for_source` now sets `AccountContext.orders_today` from the
+  team's actual paper orders since the current ET session start (and `as_of`),
+  so `router.route_proposals` and `portfolio_manager.review_portfolio` enforce
+  the per-team daily-order cap across the whole trading day. Degrades to `0` on
+  any read failure; never blocks on a stale prior-day counter.
+- `src/competition/loop_diagnostics.py` + `diagnose-competition-loop --team both`
+  — pure classifier + formatter and a read-only CLI (no proposals, no LLM, no
+  orders; market-closed-safe). Emits a per-team diagnosis enum (`READY`,
+  `MARKET_CLOSED`, `CONFIG_DISABLED`, `CAP_REACHED`, `NO_EXECUTABLE_PROPOSALS`,
+  `AGENT_GATE_FAILED`, `PYTHON_RISK_REJECTED`, `BROKER_ERROR`, `LOOP_NOT_RUNNING`,
+  `UNKNOWN`) and surfaces the tracked loop PID/log state.
+- `src/competition/iteration_audit.py` — one redacted JSONL record per team per
+  loop iteration under `data/runtime/loop_audit/` plus a `<team>_latest.json`
+  heartbeat. The loop wraps each team's cycle so a transient failure (incl.
+  `SystemExit`) is always logged to console + audit and never silently kills the
+  loop. Secrets are masked from every record.
+- Tests: `tests/test_loop_diagnostics.py`, `tests/test_iteration_audit.py`,
+  `tests/test_loop_reliability.py` cover each diagnosis state, ET-scoped order
+  counting (stale prior-day usage does not block a new day), read-only broker
+  helpers (never submit), audit append/redaction/exception logging, and the
+  no-secrets property of the report.
+
+Known limitations: gross/net/short exposure fields are still not populated from a
+live position book (exposure caps evaluate per-cycle proposal deltas); a daily
+*notional* cap is enforced only on the Discord autonomy path, not the week-loop
+path; and an already over-leveraged paper account must be reconciled/reset by the
+operator (the system never auto-liquidates).
+
+## Phase 7V - Paper portfolio management (position review + sell-to-close)
+
+Goal: turn the entry-only loop into a paper-only portfolio manager that actively
+reviews existing positions and can hold/trim/sell-to-close/watch/rotate, with a
+meaningful end-of-day report — without adding live trading, options, shorting, or
+margin execution, and keeping deterministic Python as the final gate.
+
+Delivered (this phase):
+
+- `src/config/portfolio_limits.py` - conservative paper-only limits with safe
+  defaults; long-entry vs sell-to-close permissions tracked separately.
+- `src/competition/position_review.py` - read-only per-position review (P&L,
+  weight, days-held, thesis status, conviction, deterministic recommended action +
+  reason, target/stop) and portfolio-health checks (negative cash, zero BP,
+  concentration, missing thesis) with a "block new buys?" verdict. Long-only; a
+  short is WATCH-only (never managed here).
+- `src/reporting/portfolio_review_report.py` + `review-team-portfolio` CLI -
+  read-only report (terminal + Markdown + JSON under `data/runtime/portfolio_reviews/`).
+  Never submits.
+- `src/competition/position_execution.py` + `AlpacaClientWrapper.submit_paper_sell_to_close_order`
+  - deterministic sell-to-close: caps qty to held long shares (never oversell /
+  never open-or-increase a short), rejects unheld/short symbols, refreshes
+  positions immediately before submit, honors the kill switch, logs the full
+  chain. Gated by `ENABLE_PAPER_SELL_TO_CLOSE` (default off). The long-buy path
+  now also rejects SELL actions and the `sell_to_close` flag (defense in depth).
+- `src/competition/eod_report.py` + `src/competition/daily_learning.py` +
+  `export-eod-report` CLI - once-per-team-per-ET-trading-date EOD report (after
+  close; `--send` opt-in) with concise Discord text + saved MD/JSON, and a daily
+  learning artifact (research feedback only; never mutates env/limits/permissions).
+- Tests: `tests/test_position_review.py`, `tests/test_sell_to_close.py`,
+  `tests/test_eod_report.py` - oversell capped, full close never shorts, no-position
+  sell rejected, short cannot be sold-to-close, positions refreshed before submit,
+  low-BP blocks buys but still recommends reductions, review-before-entry ordering,
+  hold reasons visible, EOD once-per-day + closed-market-safe + unknown-clock-safe,
+  no secrets in reports/learning, broker reduce-only guards.
+
+Not yet wired (designed; intentionally gated off so Alpha is untouched until the
+operator opts in): the structured LLM portfolio-review proposal agent (proposal-
+only JSON) and in-cycle auto-execution of approved trims/exits during the live
+market-hours loop. Daily-open equity and daily SPY return are not separately
+tracked yet (EOD shows `n/a` for daily figures until wired).
+
+Non-goals (unchanged): no live trading; no shorting/options/margin execution; sell-
+to-close reduces/closes existing long stock only and can never open or increase a
+short; LLMs propose only; no secrets posted; deterministic risk engine + kill
+switch remain authoritative; reduce-gross-exposure is bounded and explainable, not
+an auto-liquidation.
+
+## Phase 7W - Continuous operation, bounded memory & learning
+
+Goal: run the loop for long periods without runtime bloat, learn from verified
+outcomes in a bounded/reviewable way, report end-of-day, and stay alive via a
+watchdog - all paper-only, with deterministic Python as final authority.
+
+Delivered:
+
+- `src/competition/memory_config.py` - `MEMORY_*` retention windows + prompt caps;
+  `memory_dirs()` maps categories (production vs isolated test root).
+- `src/competition/playbook.py` - durable curated lessons (evidence_count,
+  confidence, evidence_refs, last_validated, retired/superseded, regime/symbols/
+  action_type); upsert/supersede/retire; per-team cap retires weakest (never
+  deletes).
+- `src/competition/learning_outcomes.py` - deterministic candidate generation from
+  review + attribution outcomes and an evidence gate (refs + confidence + repeated
+  or high-impact) for promotion. No evidence-free/invented lessons.
+- `src/competition/memory_retrieval.py` - bounded prompt context (working memory +
+  positions/theses + last N daily + top K ranked lessons + scorecard + constraints);
+  relevance ranking by symbol/action/regime/recency/confidence/evidence; raw
+  audit/chat excluded.
+- `src/competition/memory_maintenance.py` + `memory-status` / `memory-maintenance`
+  CLIs - read-only inventory; dry-run-default cleanup that archives (gzip weekly,
+  manifest-tracked, idempotent) then deletes, with guards for today/current-summary/
+  current-thesis/playbook and only-runtime scope; JSON+MD reports; record-level
+  rotation for the raw-audit JSONL.
+- `src/competition/loop_heartbeat.py` + `loop_watchdog.py` + `loop-health` /
+  `loop-watchdog` CLIs - per-iteration heartbeat (PID+timestamp; stale PID != alive;
+  graceful-shutdown flag wired into the loop's exit); pure health assessment +
+  watchdog with injectable spawn/kill-switch/duplicate seams; restart only when
+  dead/stale, never duplicate, never under kill switch, same project Python, logs
+  to `data/runtime/watchdog.log`, never submits orders.
+- `src/competition/weekly_synthesis.py` + `weekly-team-review` CLI - non-trading
+  weekly summary + deterministic playbook promotion/supersession; saved report;
+  optional Discord.
+- EOD send extended: prefer `paper_trading_log` channel, fall back to team channel;
+  dedup state survives restarts.
+- Tests: `tests/test_playbook_learning.py`, `tests/test_memory_system.py`,
+  `tests/test_loop_watchdog.py`, `tests/test_weekly_and_channels.py` (+ conftest
+  heartbeat/audit isolation) cover bounded context, evidence gating, supersession,
+  cap-without-delete, dry-run vs apply, archive→delete, idempotency, raw-audit
+  rotation, heartbeat, stale-PID/live-heartbeat, duplicate/kill-switch guards,
+  EOD channel fallback, and no-secrets.
+- Docs: `docs/continuous_operation.md` (memory layers, retention, cleanup, weekly
+  learning, EOD, watchdog, Windows Task Scheduler) + README/STATUS/risk_policy/
+  .env.example updates.
+
+Non-goals (unchanged): learning never auto-changes `.env`, risk limits, strategy
+code, broker permissions, or DB schema; no live/options/short/margin execution; no
+LLM order placement; durable playbook never auto-deleted; no secrets in reports/
+archives/memory/heartbeat/watchdog logs.
+
+## Phase 7X - Live-loop integrations (bounded memory, sell-to-close, auto reports)
+
+Goal: finish the three live-loop integrations without adding any new execution
+authority (no live/options/short/margin, no LLM execution, no auto settings/code).
+
+Delivered:
+
+- `src/competition/prompt_memory.py` + `llm_cycle.build_llm_context` now inject the
+  deterministic bounded-memory block into the live prompt and record prompt-memory
+  metadata (no raw prompt text/secrets). Legacy bounded summaries kept for back-compat.
+- `main._run_portfolio_management` + loop wiring: refresh -> health checks -> review
+  existing positions -> execute eligible long trims/exits (gated, capped to refreshed
+  held qty, never short) BEFORE new buys -> review-only (no new buys) when a reduction
+  is required. New `portfolio_action_*` + `new_buys_blocked_reason` audit fields, plus
+  bounded-memory metadata fields on `IterationAuditRecord`.
+- `AlpacaClientWrapper.get_calendar_day` (read-only) + `src/competition/eod_delivery.py`
+  + `src/competition/weekly_delivery.py`: clock/calendar-gated, restart-safe, retry-safe
+  auto delivery of the once-per-team/trading-date EOD (after close) and once-per-week
+  synthesis (after the week's last session), wired into the loop. Read-only status CLIs
+  `eod-report-status` / `weekly-review-status`. Toggles `AUTO_EOD_REPORT` /
+  `AUTO_WEEKLY_REVIEW`.
+- Test env fixed: `streamlit` installed from `requirements.txt` (it was already listed);
+  full suite green (1091 passed, 0 failures).
+- Tests: `tests/test_live_loop_integration.py` (bounded prompt excludes raw audit;
+  portfolio management runs before new buys; blocked health -> review-only) and
+  `tests/test_eod_weekly_delivery.py` (EOD once/after-close/weekend/holiday/open/retry/
+  status; weekly once-per-week/last-session; modules never submit).
+
+Non-goals (unchanged): no live trading; no options/short/margin execution; no buy-to-cover
+(existing shorts stay watch-only); sell-to-close reduces/closes existing long stock only and
+is capped to refreshed held qty; LLMs recommend, deterministic Python decides; no automatic
+edits to `.env`, risk limits, or source.

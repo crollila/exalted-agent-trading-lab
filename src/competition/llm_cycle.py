@@ -100,13 +100,48 @@ def build_llm_context(
             "note": research_run.status_message,
         }
 
+    account_block = alpaca_account_status(client).as_dict()
+    positions_block = alpaca_positions(client).as_dict()
+    market_block = alpaca_market_clock(client).as_dict()
+
+    # Phase 7X: deterministic BOUNDED memory retrieval is the durable-memory channel
+    # for the prompt (curated playbook + last-N daily summaries + scorecard snapshot +
+    # working memory + constraints). It excludes raw audit JSONL, unbounded agent
+    # responses, and old chat history by construction. The legacy ledger fields below
+    # remain only as compact, last-8 compatibility context.
+    from src.competition.attribution import load_team_attribution
+    from src.competition.memory_config import MemoryConfig
+    from src.competition.prompt_memory import build_bounded_prompt_memory
+
+    raw_positions = []
+    try:
+        raw_positions = list(client.get_positions()) if client is not None and client.has_credentials() else []
+    except Exception:  # noqa: BLE001 - degrade to no positions; bounded memory still builds
+        raw_positions = []
+    try:
+        attribution_entries = load_team_attribution(team_id, attribution_dir=attribution_dir)
+    except Exception:  # noqa: BLE001
+        attribution_entries = []
+    bounded_memory, memory_metadata = build_bounded_prompt_memory(
+        team_id,
+        account=(account_block.get("value") if isinstance(account_block, dict) else None),
+        raw_positions=raw_positions,
+        attribution_entries=attribution_entries,
+        market_session=(market_block.get("value") if isinstance(market_block, dict) else None),
+        scorecard_snapshot=(scorecard.as_dict() if scorecard else None),
+        config=MemoryConfig.from_env(env if isinstance(env, dict) else None),
+    )
+
     return {
         "team_id": team_id,
-        "account": alpaca_account_status(client).as_dict(),
-        "positions": alpaca_positions(client).as_dict(),
-        "market_clock": alpaca_market_clock(client).as_dict(),
+        "account": account_block,
+        "positions": positions_block,
+        "market_clock": market_block,
         "watchlist_prices": latest_prices(watch, price_fn),
         "prior_scorecard": scorecard.as_dict() if scorecard else None,
+        # Bounded durable memory (Phase 7X) — the authoritative memory channel.
+        "bounded_memory": bounded_memory,
+        "memory_metadata": memory_metadata,
         "team_memory": {
             "current_hypothesis": ledger.current_hypothesis,
             "active_strategy": ledger.active_strategy,
@@ -169,6 +204,16 @@ def build_llm_proposal_source(
             research_run=research_run,
             watchlist=research_config.watchlist,
         )
+        # Phase 7X: record bounded prompt-memory metadata (no raw prompt text/secrets)
+        # so the iteration audit can show what memory the live prompt used.
+        try:
+            from src.competition.prompt_memory import record_prompt_memory_metadata
+
+            meta = context.get("memory_metadata")
+            if isinstance(meta, dict):
+                record_prompt_memory_metadata(tid, meta)
+        except Exception:  # noqa: BLE001 - metadata is best-effort, never blocks proposals
+            pass
         bundle = generate_llm_proposals(
             tid, provider=provider, context=context, strategy_id=strategy_id
         )

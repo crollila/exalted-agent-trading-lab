@@ -623,6 +623,50 @@ remains. The deterministic risk engine and the kill switch remain authoritative 
 python -m src.main market-hours-quiet-status
 ```
 
+**Loop diagnosis + per-iteration audit (Phase 7U).** The continuous loop
+(`run-cheap-competition-loop`) calls the **real** gated competition cycle
+(`run-week-cycle --proposal-source llm`) each eligible iteration — it is not a
+status-only poller. A first busy session that exhausts buying power, or a model
+that settles into a valid no-trade, can make later days look "stuck" with no
+orders even though the loop is healthy. Two facilities make this observable:
+
+- **`diagnose-competition-loop --team both`** — a read-only, market-closed-safe
+  diagnostic. It never generates proposals, never calls an LLM, and never
+  submits an order. Per team it prints local + America/New_York time, the Alpaca
+  market clock with next open/close, loop/market-hours/autonomy config, live
+  paper equity/cash/buying-power/positions, today's submitted-order count vs the
+  configured caps (scoped to the ET trading date), the tracked loop PID/log
+  state, the latest cycle's routing/approval/Python-risk/broker results, and a
+  final diagnosis: `READY`, `MARKET_CLOSED`, `CONFIG_DISABLED`, `CAP_REACHED`,
+  `NO_EXECUTABLE_PROPOSALS`, `AGENT_GATE_FAILED`, `PYTHON_RISK_REJECTED`,
+  `BROKER_ERROR`, `LOOP_NOT_RUNNING`, or `UNKNOWN`. A persistent blocker (e.g.
+  exhausted buying power) is reported even while the market is closed, so the
+  real reason surfaces instead of a transient `MARKET_CLOSED`.
+
+  ```bash
+  python -m src.main diagnose-competition-loop --team both
+  ```
+
+- **Per-iteration audit log** — every loop iteration appends one JSONL record
+  per team to `data/runtime/loop_audit/iterations.jsonl` and refreshes
+  `data/runtime/loop_audit/<team>_latest.json`. Records carry the iteration id,
+  timestamps, market state, gate outcomes, proposal/routing counts, account
+  summary, caps, and any exception text. The per-team cycle is wrapped so a
+  transient failure (including a `SystemExit` from an unavailable LLM provider)
+  can never silently kill the loop or pass without a visible console line **and**
+  an audit record. Secrets are redacted from every record. The path is gitignored.
+
+**Daily-order reconciliation fix (Phase 7U).** The per-team daily-order cap is
+now reconciled against the team's actual paper orders for the current ET trading
+date (`AccountContext.orders_today`). Previously `orders_today` was always `0`,
+so the cap never engaged and a single busy session could drain buying power.
+Each execution decision still refreshes the live Alpaca account (equity/cash/
+buying-power) before routing, and the deterministic risk engine remains the final
+gate. Known limitation: gross/net/short exposure fields are not yet populated
+from live positions (the exposure caps evaluate against the per-cycle proposal
+deltas, not a live book snapshot); and a daily *notional* cap is enforced only on
+the Discord autonomy path, not the week-loop path.
+
 Review-only updates memory/scorecard and emits advisory hold/trim/close recommendations but never
 submits orders or builds a broker client. The daily SPY attribution and review reuse local
 scorecard/attribution data (no new external web/search calls; Alpaca news stays the only live research
@@ -746,3 +790,126 @@ Chat, Agent Hub, `!ask_team`, `!ask_agent`, and tournament/research commands can
 Paper trading does not prove live profitability. "Self-improvement" means runtime memory,
 scorecards, and prompt feedback — not model-weight training. See `docs/risk_policy.md` and
 `docs/model_provider_setup.md`.
+
+## Paper portfolio management (Phase 7V)
+
+The competition is moving from entry-only proposals toward active paper portfolio
+management. Each team can review its existing positions and decide to **hold,
+trim, sell-to-close, watch, or rotate** — and "do nothing" is a valid outcome.
+
+**Read-only position review** (never submits, no LLM):
+
+```bash
+python -m src.main review-team-portfolio --team both   # or: --team alpha | --team beta
+```
+
+For every position it shows quantity, average entry, current price/market value,
+unrealized P&L and %, portfolio weight, days held, the original local thesis (when
+available), a thesis status (intact/weakening/invalidated/unknown), a conviction
+score, and a deterministic recommended action (hold/trim/exit/watch) with a clear
+reason, target, and stop. It flags critical portfolio problems (negative cash,
+zero buying power, concentration, missing thesis), states whether new buys should
+be **blocked** pending reductions, and saves Markdown+JSON under the ignored
+`data/runtime/portfolio_reviews/`.
+
+**Deterministic sell-to-close** (`ENABLE_PAPER_SELL_TO_CLOSE`, default **off**):
+the only new order direction. It can **only reduce/close an existing LONG stock
+position** — the deterministic gate caps the quantity to held long shares (never
+oversells, never opens/increases a short), rejects unheld/short symbols, re-reads
+Alpaca positions immediately before submitting, honors the kill switch, and logs
+the full chain (proposal → recommendation → risk decision → order → broker
+result). Long-entry and sell-to-close permissions are tracked **separately** and
+shown in config. **No shorting, options execution, margin execution, or live
+trading was added.**
+
+**End-of-day report + daily learning** (read-only; `--send` is opt-in):
+
+```bash
+python -m src.main export-eod-report --team both          # build + save (no Discord post)
+python -m src.main export-eod-report --team both --send   # post once per ET trading date, after close
+```
+
+The EOD report (saved under `data/runtime/eod_reports/`, learning under
+`data/runtime/daily_learning/`) summarizes the session: equity/P&L, SPY-relative
+performance where available, cash/buying-power/exposure, submitted orders with
+reasons, positions held with reasons, winners/losers, rejects/skips, learnings,
+thesis changes, next-day watchlist and plan, and a paper-only disclaimer. It uses
+the Alpaca market clock and sends at most once per team per trading date.
+
+Conservative paper-only limits are configurable (safe defaults): `MAX_POSITION_PCT`,
+`MAX_PORTFOLIO_GROSS_EXPOSURE_PCT`, `MAX_POSITION_TRIMS_PER_DAY`,
+`MAX_POSITION_EXITS_PER_DAY`, `MAX_CAPITAL_ROTATIONS_PER_DAY`,
+`MAX_DAILY_ORDERS_PER_TEAM`, `MAX_DAILY_NOTIONAL_PER_TEAM`,
+`EMERGENCY_BUYING_POWER_PCT`, `CONCENTRATION_ALERT_PCT`. A reduce-gross-exposure
+action is bounded and explainable — the system never auto-liquidates the book.
+
+Known remaining work (not yet wired): the structured **LLM portfolio-review**
+proposal agent and **in-cycle auto-execution** of approved trims/exits during the
+live market-hours loop are designed and gated behind `ENABLE_PAPER_SELL_TO_CLOSE`
+but are intentionally **not** auto-enabled yet; daily-open equity and daily SPY
+return are not separately tracked (shown as `n/a` until wired).
+
+## Continuous operation, bounded memory & learning (Phase 7W)
+
+For long-running, low-bloat operation that learns from verified outcomes, see
+[`docs/continuous_operation.md`](docs/continuous_operation.md). Highlights:
+
+- **Bounded layered memory**: working memory (rebuilt each cycle), daily summaries,
+  a durable curated **playbook** (validated lessons with evidence count/confidence/
+  last-validated/supersession), and scorecards. Raw prompt history is not stored.
+- **Learning gate**: lessons promote to the playbook only via deterministic
+  evidence rules (evidence refs + confidence + repeated or high-impact); stale/
+  contradicted lessons are **superseded, not deleted**. An LLM can't invent
+  permanent lessons.
+- **Bounded retrieval**: prompts get only current working memory, positions +
+  theses, the last few daily summaries, the top-K ranked playbook lessons, the
+  latest scorecard, and constraints — never raw audit/chat floods.
+- **Inspect / clean** (read-only + dry-run-by-default):
+  ```bash
+  python -m src.main memory-status --team both
+  python -m src.main memory-maintenance --team both --dry-run   # --apply to act
+  ```
+  Cleanup archives old raw files into gzip weekly archives then deletes them,
+  idempotently; it never removes today's data, the current daily summary, current
+  position-thesis records, or durable playbook lessons.
+- **Weekly synthesis** (non-trading): `python -m src.main weekly-team-review --team both`.
+- **EOD Discord report**: once per team per trading date after close, preferring the
+  paper-trading log channel and falling back to the team channel; dedup survives
+  restarts. Ends with "Paper-only research summary. No live trading."
+- **Watchdog / eternal operation**: the loop writes a heartbeat each iteration; a
+  stale PID alone is not "alive". `loop-health` reports status; `loop-watchdog`
+  restarts only a dead/stale loop, never duplicates, never starts under the kill
+  switch, uses the same project Python, and never submits orders.
+  ```bash
+  python -m src.main loop-health
+  python -m src.main loop-watchdog --team both --sleep-seconds 900
+  ```
+  Windows Task Scheduler setup (single watchdog at logon) is documented in
+  `docs/continuous_operation.md`.
+
+None of this learning/automation changes `.env`, risk limits, strategy code, or
+broker permissions, and it never enables live/options/short/margin execution.
+
+### Live-loop integrations (Phase 7X)
+
+The three remaining integrations are now wired into the continuously-running loop:
+
+- **Bounded memory is the live prompt's durable-memory channel.** `build_llm_context`
+  injects only the bounded block (working memory + positions/theses + last-N daily
+  summaries + top-K active playbook lessons + scorecard snapshot + constraints) and
+  logs prompt-memory metadata to the iteration audit (no raw audit floods, no
+  secrets).
+- **Portfolio review + sell-to-close run before new buys.** Each market-hours
+  iteration refreshes the account/positions, reviews holdings, executes eligible
+  long trims/exits (gated by `ENABLE_PAPER_SELL_TO_CLOSE`, capped to refreshed held
+  qty, never shorting) **before** entries, and runs review-only (no new buys) when
+  deterministic health requires a reduction.
+- **EOD + weekly reports auto-deliver.** The loop sends the once-per-team/trading-date
+  EOD after close and the once-per-week synthesis after the week's last session
+  (Alpaca clock/calendar gated; restart-safe; retried on failure). Inspect delivery
+  with `eod-report-status --team both` and `weekly-review-status --team both`. Toggle
+  with `AUTO_EOD_REPORT` / `AUTO_WEEKLY_REVIEW` (default on).
+
+Still **not** added: live trading, options/short/margin execution, buy-to-cover for
+shorts (existing shorts stay watch-only), LLM direct execution, and any automatic
+edits to `.env`, risk limits, or source code.

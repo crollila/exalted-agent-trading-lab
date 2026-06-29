@@ -13,8 +13,48 @@ This project is paper-trading only.
 - Paper trading does not prove live profitability.
 - Max 20% of portfolio in one stock (default).
 - Minimum 10% cash reserve.
+
+## Paper sell-to-close (Phase 7V)
+
+The portfolio-management stage may **reduce or fully close an existing LONG stock
+position** in paper mode (a "sell-to-close" / trim). This is the only new order
+direction added, and it is deliberately narrow:
+
+- Sell-to-close may only **sell shares already held long**. The deterministic gate
+  caps the sell quantity to the currently-held long shares, so it can never
+  oversell and can never open or increase a short.
+- It **refuses unknown/unheld symbols** and **net-short positions** (closing a
+  short would be a buy-to-cover, which is **not** implemented).
+- Positions are **re-read from Alpaca immediately before submission** and
+  re-validated against the freshly-held quantity, so a stale snapshot cannot
+  oversell.
+- It is gated by a **separate** flag, `ENABLE_PAPER_SELL_TO_CLOSE` (default
+  `false`), tracked independently from `ENABLE_PAPER_STOCKS` (long entry), and it
+  still honors the kill switch and the paper-only endpoint checks.
+- "Reduce gross exposure" is **bounded and explainable** (per-day trim/exit caps);
+  there is **no auto-liquidation** of the whole book.
+
+**No shorting, options execution, margin execution, or live trading was added by
+this phase.** The deterministic risk engine and kill switch remain authoritative.
 - Max 5 new positions per day (legacy local runner); competition cap is `MAX_DAILY_ORDERS_PER_TEAM`.
 - Max 30% daily turnover (legacy local runner).
+
+## Learning, memory & continuous operation (Phase 7W)
+
+- Learning is **research feedback only**. Promoting a playbook lesson, running
+  weekly synthesis, EOD reporting, or memory cleanup **never** changes `.env`,
+  risk limits, strategy code, broker permissions, or the database schema, and
+  never enables live/options/short/margin execution or LLM order placement.
+- A lesson is promoted to the durable playbook only through a deterministic
+  evidence gate (non-empty evidence refs + explicit confidence + repeated or
+  high-impact). Stale/contradicted lessons are **superseded, not deleted**.
+- Memory cleanup is dry-run by default; it never deletes today's data, the
+  current daily summary, current position-thesis records, or durable playbook
+  lessons, and only ever touches runtime directories (never `.env`, source, DB
+  migrations, Git, or user notes).
+- The loop watchdog may only respawn the gated loop process (same project
+  Python); it never submits orders and never starts while the kill switch is
+  engaged. See `docs/continuous_operation.md`.
 
 ## Advanced paper permission levels
 

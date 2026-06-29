@@ -56,6 +56,7 @@ from src.competition.daily_review import (
     load_daily_spy_attribution,
     load_latest_daily_team_review,
 )
+from src.competition.market_time import ny_session_start_utc, ny_trading_date, now_utc, to_ny
 from src.competition.quiet_mode import OFF_HOURS_SLEEP_NOTICE, OffHoursQuietConfig
 from src.competition.tomorrow_plan import (
     export_tomorrow_plan,
@@ -232,14 +233,44 @@ def run_paper_status(team: str = "global") -> None:
     print(f"Buying power: {account.get('buying_power')}")
 
 
-def _account_context_for_source(source: str, settings: Settings) -> "AccountContext":
+def _orders_today_for_source(source: str, settings: Settings) -> int:
+    """Count this team's paper orders for the current ET trading date (read-only).
+
+    Reconciles the deterministic per-team daily-order cap against orders that
+    were actually submitted to the Alpaca paper account, scoped to midnight
+    America/New_York. Degrades to 0 on any failure (never crashes a cycle and
+    never submits anything). A 0 fallback fails *open* only for the daily-order
+    cap; every other deterministic risk gate still applies.
+    """
+
+    try:
+        client = client_for_source(source, base_settings=settings)
+    except Exception:  # noqa: BLE001 - missing/invalid creds -> cannot reconcile; degrade
+        return 0
+    if client is None or not client.has_credentials():
+        return 0
+    try:
+        return int(client.count_orders_since(ny_session_start_utc()))
+    except Exception as exc:  # noqa: BLE001 - read-only count must never break the cycle
+        print(f"({source} daily-order reconciliation unavailable: {exc}; assuming 0 today.)")
+        return 0
+
+
+def _account_context_for_source(
+    source: str, settings: Settings, *, reconcile_orders: bool = True
+) -> "AccountContext":
     """Build a deterministic AccountContext from a specific credential source.
 
     Team sources never fall back to global keys. If the source's account is
     unavailable, fall back to a deterministic STARTING_EQUITY context (no global
-    credentials are ever used for a team).
+    credentials are ever used for a team). ``orders_today`` is reconciled against
+    the team's actual paper orders for the current ET trading date so the
+    per-team daily-order cap is enforced across the whole day (previously it was
+    always 0, so the cap never engaged and a single busy session could exhaust
+    buying power). Pass ``reconcile_orders=False`` for read-only/no-broker paths.
     """
 
+    orders_today = _orders_today_for_source(source, settings) if reconcile_orders else 0
     diagnosis = diagnose_source(source, base_settings=settings)
     if diagnosis.auth_ok and diagnosis.account:
         try:
@@ -247,6 +278,8 @@ def _account_context_for_source(source: str, settings: Settings) -> "AccountCont
                 equity=float(diagnosis.account["equity"]),
                 cash=float(diagnosis.account["cash"]),
                 buying_power=float(diagnosis.account["buying_power"]),
+                orders_today=orders_today,
+                as_of=ny_trading_date(),
             )
         except (TypeError, ValueError, KeyError):
             pass
@@ -258,6 +291,8 @@ def _account_context_for_source(source: str, settings: Settings) -> "AccountCont
         equity=settings.starting_equity,
         cash=settings.starting_equity,
         buying_power=settings.starting_equity * 2.0,
+        orders_today=orders_today,
+        as_of=ny_trading_date(),
     )
 
 
@@ -844,6 +879,965 @@ def _cheap_loop_market_open() -> bool | None:
     return None
 
 
+def _cheap_loop_clock_snapshot(settings: Settings) -> dict | None:
+    """Best-effort read-only clock snapshot (is_open + next open/close). None on failure."""
+
+    for source in ("team_alpha", "team_beta"):
+        client = _safe_read_client(source, settings)
+        if client is None:
+            continue
+        try:
+            return client.get_clock_snapshot()
+        except Exception:  # noqa: BLE001 - degrade to undeterminable
+            continue
+    return None
+
+
+def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None):
+    """Collect read-only facts for one team's loop diagnosis. No LLM, no orders.
+
+    Every broker call here is a read-only GET (account, positions, clock, order
+    list). Nothing is generated or submitted.
+    """
+
+    from src.competition.loop_diagnostics import TeamLoopFacts
+    from src.competition.iteration_audit import latest_status_age_seconds
+    from src.research.data_tools import alpaca_positions
+
+    permissions = TradingPermissions.from_env()
+    gate_config = CheapCycleGateConfig.from_env()
+    pm_config = PortfolioManagerConfig.from_env()
+    quiet_config = OffHoursQuietConfig.from_env()
+
+    now = now_utc()
+    market_hours_only = os.getenv("CHEAP_LOOP_MARKET_HOURS_ONLY", "true").strip().lower() not in {"0", "false", "no", "off"}
+    review_only = os.getenv("REVIEW_ONLY_DURING_MARKET_HOURS", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    market_is_open = clock.get("is_open") if clock else None
+
+    # Account (read-only). Never falls back to global creds for a team.
+    diagnosis = diagnose_source(team, base_settings=settings)
+    equity = cash = bp = None
+    account_ok = bool(diagnosis.auth_ok and diagnosis.account)
+    if account_ok:
+        try:
+            equity = float(diagnosis.account["equity"])
+            cash = float(diagnosis.account["cash"])
+            bp = float(diagnosis.account["buying_power"])
+        except (TypeError, ValueError, KeyError):
+            account_ok = False
+
+    # Open positions (best-effort, read-only).
+    open_positions = None
+    read_client = _safe_read_client(team, settings)
+    if read_client is not None:
+        try:
+            open_positions = len(alpaca_positions(read_client).value or [])
+        except Exception:  # noqa: BLE001 - positions are best-effort context only
+            open_positions = None
+
+    low_bp_threshold = pm_config.low_buying_power_review_threshold_pct
+    low_bp = False
+    if account_ok and equity and equity > 0:
+        bp_for_ratio = bp if bp is not None else (cash or 0.0)
+        low_bp = (bp_for_ratio / equity) < low_bp_threshold
+
+    orders_today = _orders_today_for_source(team, settings) if account_ok else None
+
+    decision, _ = _evaluate_team_cheap_gate(team)
+
+    # Latest recorded cycle (scorecard).
+    scorecard = load_latest_scorecard(team)
+    no_trade_reason = None
+    if scorecard is not None:
+        if getattr(scorecard, "portfolio_no_trade", False):
+            if low_bp or (scorecard.buying_power == 0):
+                no_trade_reason = "Low buying power: deterministic gate blocks new-money buys."
+            elif (scorecard.proposals_count or 0) == 0:
+                no_trade_reason = "No proposal candidates cleared review (model held / proposed nothing)."
+            else:
+                no_trade_reason = f"Portfolio manager decision: {scorecard.portfolio_decision_type}."
+
+    last_audit_iso, audit_age = latest_status_age_seconds(team, now=now)
+    heartbeat_stale = audit_age is not None and audit_age > max(3 * 900, 3 * int(os.getenv("CHEAP_LOOP_SLEEP_SECONDS", "900") or "900"))
+
+    return TeamLoopFacts(
+        team_id=team,
+        local_iso=now.astimezone().isoformat(),
+        ny_iso=to_ny(now).isoformat(),
+        market_is_open=market_is_open,
+        clock_next_open=(clock or {}).get("next_open"),
+        clock_next_close=(clock or {}).get("next_close"),
+        clock_note=None if clock else "no working team credential could read the clock",
+        kill_switch_engaged=read_kill_switch().engaged,
+        dry_run=settings.dry_run,
+        trading_mode=permissions.trading_mode,
+        stocks_enabled=permissions.stocks_enabled(),
+        strict_market_hours_only=quiet_config.strict_market_hours_only,
+        market_hours_only=market_hours_only,
+        review_only_during_market_hours=review_only,
+        sleep_seconds=int(os.getenv("CHEAP_LOOP_SLEEP_SECONDS", "900") or "900"),
+        cheap_gate_enabled=gate_config.enabled,
+        min_full_cycle_interval_minutes=gate_config.interval_for(team),
+        proposal_source=_resolve_proposal_source_name(None),
+        account_ok=account_ok,
+        account_classification=diagnosis.classification,
+        equity=equity,
+        cash=cash,
+        buying_power=bp,
+        open_positions=open_positions,
+        low_buying_power=low_bp,
+        low_bp_threshold_pct=low_bp_threshold,
+        orders_today=orders_today,
+        max_daily_orders_per_team=permissions.max_daily_orders_per_team,
+        gate_should_run_full_cycle=decision.should_run_full_cycle,
+        gate_recommend_review_only=decision.recommend_review_only,
+        gate_reason=decision.reason,
+        latest_scorecard_path=f"data/scorecards/{team}_latest.json" if scorecard else None,
+        latest_cycle_at=getattr(scorecard, "week_start", None) if scorecard else None,
+        proposals_count=getattr(scorecard, "proposals_count", None) if scorecard else None,
+        approved_count=getattr(scorecard, "approved_count", None) if scorecard else None,
+        rejected_count=getattr(scorecard, "rejected_count", None) if scorecard else None,
+        simulation_only_count=getattr(scorecard, "simulation_only_count", None) if scorecard else None,
+        orders_submitted=getattr(scorecard, "orders_submitted", None) if scorecard else None,
+        broker_rejected_count=getattr(scorecard, "broker_rejected_count", None) if scorecard else None,
+        portfolio_decision_type=getattr(scorecard, "portfolio_decision_type", None) if scorecard else None,
+        portfolio_no_trade=getattr(scorecard, "portfolio_no_trade", None) if scorecard else None,
+        no_trade_reason=no_trade_reason,
+        last_audit_iso=last_audit_iso,
+        audit_age_seconds=audit_age,
+        loop_heartbeat_stale=bool(heartbeat_stale),
+    )
+
+
+def run_diagnose_competition_loop(team: str = "both") -> None:
+    """Non-trading diagnostic for the cheap competition loop (Phase 7U).
+
+    Read-only: never generates proposals, never calls an LLM, never submits an
+    order. Works while the market is closed. Prints a full per-team report plus a
+    final diagnosis enum, and surfaces the tracked loop process/PID/log state.
+    """
+
+    from src.competition.loop_diagnostics import classify_diagnosis, format_team_report
+    from src.competition.iteration_audit import AUDIT_JSONL_NAME, resolve_audit_dir
+
+    audit_dir = resolve_audit_dir()
+
+    settings = Settings.from_env()
+    teams = list(WEEK_TEAMS) if team == "both" else [team]
+
+    print("=== diagnose-competition-loop (Phase 7U; paper-only; READ-ONLY; no LLM, no orders) ===")
+    print("This command never generates proposals, never calls an LLM, and never submits orders.")
+    print("")
+
+    # Tracked loop process / PID / log state (best-effort; no UI/streamlit import side effects).
+    try:
+        from src.ui.operator_controls import cheap_loop_log_path, cheap_loop_pid_path
+        from src.ui.process_control import is_process_running, read_pid
+
+        pid_path = cheap_loop_pid_path()
+        pid = read_pid(pid_path)
+        alive = is_process_running(pid) if pid is not None else False
+        log_path = cheap_loop_log_path()
+        print("Tracked cheap-loop process (data/runtime):")
+        print(f"  pid_file={pid_path} pid={pid} running={alive}")
+        if pid is not None and not alive:
+            print("  WARNING: tracked PID is not alive (stale PID file). The loop may have stopped.")
+        print(f"  log_file={log_path} exists={log_path.exists()}")
+        print(f"  audit_jsonl={audit_dir / AUDIT_JSONL_NAME} "
+              f"exists={(audit_dir / AUDIT_JSONL_NAME).exists()}")
+    except Exception as exc:  # noqa: BLE001 - process introspection is best-effort
+        print(f"(process/PID introspection unavailable: {exc})")
+    print("")
+
+    clock = _cheap_loop_clock_snapshot(settings)
+
+    summary: list[tuple[str, str]] = []
+    for tid in teams:
+        facts = _gather_team_loop_facts(tid, settings=settings, clock=clock)
+        diagnosis = classify_diagnosis(facts)
+        print(format_team_report(facts, diagnosis))
+        print("")
+        summary.append((tid, diagnosis.diagnosis))
+
+    print("=== Summary ===")
+    for tid, diag in summary:
+        print(f"  {tid}: {diag}")
+
+
+def _normalize_team_arg(team: str) -> list[str]:
+    """Map alpha|beta|team_alpha|team_beta|both to a list of canonical team ids."""
+
+    value = (team or "both").strip().lower()
+    if value in {"both", "all", ""}:
+        return list(WEEK_TEAMS)
+    alias = {"alpha": "team_alpha", "beta": "team_beta"}
+    canonical = alias.get(value, value)
+    if canonical not in WEEK_TEAMS:
+        print(f"Unknown team '{team}'. Use one of: alpha, beta, both (or team_alpha/team_beta).")
+        raise SystemExit(1)
+    return [canonical]
+
+
+def _gather_team_positions(team: str, settings: Settings) -> list:
+    """Refreshed, read-only Alpaca positions for a team. Degrades to [] safely."""
+
+    client = _safe_read_client(team, settings)
+    if client is None or not client.has_credentials():
+        return []
+    try:
+        return list(client.get_positions())
+    except Exception as exc:  # noqa: BLE001 - read-only; degrade rather than crash
+        print(f"({team} positions unavailable: {exc})")
+        return []
+
+
+def run_review_team_portfolio(team: str = "both") -> None:
+    """Read-only position review + portfolio-health report (Phase 7V).
+
+    Refreshes the team's Alpaca account + positions, reviews every long holding
+    (P&L, weight, thesis status, recommended hold/trim/exit/watch), flags critical
+    portfolio problems, states whether new buys should be blocked, and saves a
+    Markdown+JSON report under the ignored runtime path. NEVER calls submit_order.
+    """
+
+    from src.competition.position_review import build_team_portfolio_review
+    from src.config.portfolio_limits import PortfolioLimits
+    from src.reporting.portfolio_review_report import format_review_terminal, save_review
+
+    settings = Settings.from_env()
+    limits = PortfolioLimits.from_env()
+    teams = _normalize_team_arg(team)
+
+    print("=== review-team-portfolio (Phase 7V; paper-only; READ-ONLY; never submits an order) ===")
+    print(
+        f"Permissions: long_entry={limits.enable_paper_long_entry} "
+        f"sell_to_close={limits.enable_paper_sell_to_close} "
+        f"(sell-to-close reduces/closes existing long stock only; no shorting/options/margin/live)."
+    )
+    print("")
+
+    for tid in teams:
+        # Read-only account snapshot (no order-count broker call, no submission).
+        account = _account_context_for_source(tid, settings, reconcile_orders=False)
+        raw_positions = _gather_team_positions(tid, settings)
+        attribution_entries = load_team_attribution(tid)
+        review = build_team_portfolio_review(
+            tid,
+            equity=account.equity,
+            cash=account.cash,
+            buying_power=account.buying_power,
+            raw_positions=raw_positions,
+            attribution_entries=attribution_entries,
+            limits=limits,
+        )
+        print(format_review_terminal(review))
+        try:
+            saved = save_review(review)
+            print(f"(saved: {saved['markdown']} / {saved['json']})")
+        except Exception as exc:  # noqa: BLE001 - persistence is best-effort
+            print(f"(could not save review for {tid}: {exc})")
+        print("")
+
+
+def _team_portfolio_review_for(team: str, settings: Settings):
+    """Build a read-only portfolio review for a team (shared by review/EOD)."""
+
+    from src.competition.position_review import build_team_portfolio_review
+    from src.config.portfolio_limits import PortfolioLimits
+
+    account = _account_context_for_source(team, settings, reconcile_orders=False)
+    raw_positions = _gather_team_positions(team, settings)
+    attribution_entries = load_team_attribution(team)
+    return build_team_portfolio_review(
+        team,
+        equity=account.equity, cash=account.cash, buying_power=account.buying_power,
+        raw_positions=raw_positions, attribution_entries=attribution_entries,
+        limits=PortfolioLimits.from_env(),
+    )
+
+
+def _todays_submitted_orders(team: str):
+    """Summarize today's (ET) submitted paper orders from local attribution."""
+
+    from src.competition.eod_report import OrderLine
+
+    entries = load_team_attribution(team)
+    today = ny_trading_date().isoformat()
+    lines: list = []
+    summaries: list[dict] = []
+    for e in entries:
+        ts = getattr(e, "timestamp", "") or ""
+        if not ts.startswith(today) or not getattr(e, "broker_submitted", False):
+            continue
+        asset_type = str(getattr(e, "asset_type", "") or "")
+        side = "sell" if "short" in asset_type else "buy"
+        qty = getattr(e, "quantity", None) or 0
+        price = getattr(e, "entry_price", None)
+        notional = (qty * price) if (qty and price) else None
+        lines.append(OrderLine(
+            symbol=str(getattr(e, "symbol", "")), side=side, quantity=float(qty),
+            price=price, notional=notional, status="submitted",
+            reason=(getattr(e, "thesis", "") or "")[:160],
+        ))
+        summaries.append({"symbol": getattr(e, "symbol", ""), "side": side, "quantity": qty})
+    return lines, summaries
+
+
+def _build_team_eod(tid: str, settings: Settings, market_open: bool | None):
+    """Build + save the EOD report and daily learning for one team. Read-only."""
+
+    from src.competition.eod_report import build_eod_report, render_eod_discord, save_eod_report
+    from src.competition.daily_learning import build_daily_learning, save_daily_learning
+
+    review = _team_portfolio_review_for(tid, settings)
+    order_lines, order_summaries = _todays_submitted_orders(tid)
+    ledger = TeamLearningLedger.load(tid)
+    report = build_eod_report(
+        review,
+        starting_equity=None,
+        spy_daily_return_pct=None,
+        submitted_orders=order_lines,
+        rejected_or_skipped=[p.reason for p in review.positions if p.recommended_action == "exit"],
+        learnings=ledger.latest_lessons(5),
+        thesis_changes=[
+            f"{p.symbol}: thesis {p.thesis_status}"
+            for p in review.positions if p.thesis_status in ("weakening", "invalidated")
+        ],
+        next_day_watchlist=list(ledger.watchlist or []),
+        market_is_open=market_open,
+    )
+    learning = build_daily_learning(review, submitted_orders=order_summaries)
+    saved = None
+    try:
+        saved = save_eod_report(report)
+        save_daily_learning(learning)
+    except Exception as exc:  # noqa: BLE001 - persistence best-effort
+        print(f"(could not save EOD for {tid}: {exc})")
+    return report, render_eod_discord(report), saved
+
+
+def _auto_send_eod_for_team(
+    tid: str, settings: Settings, *, clock: dict | None, calendar_day: dict | None,
+    force: bool = False, dry_run: bool = False,
+) -> dict:
+    """Eligibility-gated EOD build + deliver with durable retry-safe state. No orders.
+
+    Persists a delivery record BEFORE and AFTER sending so a restart cannot
+    duplicate a successful send, and a failed Discord delivery is retried later.
+    """
+
+    from src.competition.eod_report import mark_sent
+    from src.competition.eod_delivery import DeliveryRecord, eod_send_eligible, get_record, upsert_record
+    from src.competition.market_time import ny_trading_date
+
+    market_open = clock.get("is_open") if clock else None
+    trading_date = ny_trading_date().isoformat()
+    eligible, reason = eod_send_eligible(
+        tid, clock_is_open=market_open, calendar_day=calendar_day, force=force,
+    )
+    if not eligible:
+        return {"team": tid, "trading_date": trading_date, "sent": False, "reason": reason}
+
+    report, message, _saved = _build_team_eod(tid, settings, market_open)
+    record = get_record(tid, trading_date)
+    record.generated = True
+    record.attempts += 1
+    record.last_attempt_at = now_utc().isoformat()
+    upsert_record(record)  # persist BEFORE send so a crash mid-send is recoverable
+
+    if dry_run:
+        return {"team": tid, "trading_date": trading_date, "sent": False,
+                "reason": "dry-run: would send", "generated": True}
+
+    sent, channel = _send_eod_to_discord(tid, message)
+    if sent:
+        record.delivered = True
+        record.destination = channel
+        record.error = None
+        upsert_record(record)
+        mark_sent(tid, trading_date)
+        return {"team": tid, "trading_date": trading_date, "sent": True, "destination": channel}
+    # Delivery failed: keep the saved report, record the error; retry next iteration
+    # unless it's a terminal config error (Discord not configured).
+    record.delivered = False
+    record.destination = channel
+    record.error = "discord_not_configured" if channel in ("disabled", "no_channel") else f"send_failed:{channel}"
+    upsert_record(record)
+    return {"team": tid, "trading_date": trading_date, "sent": False,
+            "reason": record.error, "retry_pending": record.retry_pending}
+
+
+def _maybe_auto_send_eod(teams: list[str], settings: Settings, *, market_open: bool | None,
+                         dry_run_loop: bool) -> None:
+    """Called each iteration: when the market is closed, deliver any due EOD reports."""
+
+    if market_open is not False:  # only attempt when the market is known CLOSED
+        return
+    if os.getenv("AUTO_EOD_REPORT", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    calendar_day = None
+    try:
+        client = _safe_read_client(teams[0], settings)
+        if client is not None and client.has_credentials():
+            calendar_day = client.get_calendar_day(ny_trading_date())
+    except Exception as exc:  # noqa: BLE001 - calendar best-effort; eligibility handles None
+        print(f"(EOD calendar lookup unavailable: {exc})")
+    clock = {"is_open": market_open}
+    for tid in teams:
+        try:
+            res = _auto_send_eod_for_team(tid, settings, clock=clock, calendar_day=calendar_day,
+                                          dry_run=dry_run_loop)
+            if res.get("sent"):
+                print(f"[eod] {tid}: delivered to #{res.get('destination')} for {res.get('trading_date')}")
+            elif res.get("generated") or res.get("retry_pending"):
+                print(f"[eod] {tid}: {res.get('reason')}")
+        except Exception as exc:  # noqa: BLE001 - EOD must never crash the loop
+            print(f"[eod] {tid}: auto-EOD error: {exc}")
+
+
+def run_export_eod_report(team: str = "both", *, force: bool = False, send: bool = False) -> None:
+    """Build + save the end-of-day report and daily learning artifact (manual).
+
+    Read-only and deterministic: never submits orders, never calls an LLM. Sends to
+    Discord only with --send (opt-in), once per team per ET trading date, after the
+    regular session closes (or with --force to preview while closed/unknown).
+    """
+
+    settings = Settings.from_env()
+    teams = _normalize_team_arg(team)
+    clock = _cheap_loop_clock_snapshot(settings)
+    market_open = clock.get("is_open") if clock else None
+    calendar_day = None
+    try:
+        client = _safe_read_client(teams[0], settings)
+        if client is not None and client.has_credentials():
+            calendar_day = client.get_calendar_day(ny_trading_date())
+    except Exception:  # noqa: BLE001
+        calendar_day = None
+
+    print("=== export-eod-report (paper-only; READ-ONLY; never submits an order) ===")
+    for tid in teams:
+        report, message, saved = _build_team_eod(tid, settings, market_open)
+        print("")
+        print(message)
+        if saved:
+            print(f"(saved EOD: {saved['markdown']} / {saved['json']})")
+        if send:
+            res = _auto_send_eod_for_team(tid, settings, clock=clock, calendar_day=calendar_day, force=force)
+            if res.get("sent"):
+                print(f"(posted EOD for {tid} to Discord #{res['destination']})")
+            else:
+                print(f"(not sent: {res.get('reason')})")
+
+
+def run_eod_report_status(team: str = "both") -> None:
+    """Read-only EOD delivery status for the current ET trading date. No secrets."""
+
+    from src.competition.eod_delivery import get_record
+    from src.competition.market_time import ny_trading_date
+
+    teams = _normalize_team_arg(team)
+    trading_date = ny_trading_date().isoformat()
+    settings = Settings.from_env()
+    market_open = _cheap_loop_market_open()
+    state = "open" if market_open is True else ("closed" if market_open is False else "unknown")
+    print("=== eod-report-status (Phase 7X; paper-only; READ-ONLY; no secrets) ===")
+    print(f"Current ET trading date: {trading_date} | market: {state}")
+    for tid in teams:
+        rec = get_record(tid, trading_date)
+        print(f"\n-- {tid} --")
+        print(f"  generated:   {rec.generated}")
+        print(f"  delivered:   {rec.delivered}")
+        print(f"  destination: {rec.destination or 'n/a'}")
+        print(f"  attempts:    {rec.attempts} (last {rec.last_attempt_at or 'never'})")
+        print(f"  error:       {rec.error or 'none'}")
+        print(f"  retry_pending: {rec.retry_pending}")
+
+
+def _send_eod_to_discord(team_id: str, message: str) -> tuple[bool, str]:
+    """Best-effort EOD post. Prefers the paper-trading log channel, falls back to
+    the team channel. Returns (sent, channel_label). Never crashes."""
+
+    try:
+        from src.discord_bot.competition_updates import _http_send
+        config = _discord_iteration_update_config()
+        if config is None or not getattr(config, "enabled", False):
+            return False, "disabled"
+        token = getattr(config, "token", None)
+        special = getattr(config, "special_channel_ids", None) or {}
+        teams = getattr(config, "team_channel_ids", None) or {}
+        # Preferred: the configured paper-trading log channel; else the team channel.
+        channel_id = special.get("paper_trading_log")
+        label = "paper_trading_log"
+        if not channel_id:
+            channel_id = teams.get(team_id)
+            label = f"{team_id}_channel"
+        if not channel_id or not token:
+            return False, "no_channel"
+        _http_send(channel_id, message, token)
+        return True, label
+    except Exception as exc:  # noqa: BLE001 - Discord must never crash the EOD path
+        print(f"(EOD Discord post unavailable for {team_id}: {exc})")
+        return False, "error"
+
+
+# ---------------------------------------------------------------------------
+# Phase 7W: bounded memory, maintenance, weekly synthesis, loop health/watchdog
+# ---------------------------------------------------------------------------
+def run_memory_status(team: str = "both") -> None:
+    """Read-only inventory of per-team runtime memory. No secrets, no mutation."""
+
+    from src.competition.memory_config import MemoryConfig
+    from src.competition.memory_maintenance import inventory
+
+    config = MemoryConfig.from_env()
+    teams = _normalize_team_arg(team)
+    print("=== memory-status (Phase 7W; paper-only; READ-ONLY; no secrets) ===")
+    print(f"Retention (days): daily_summary={config.daily_summary_retention_days} "
+          f"raw_audit={config.raw_audit_retention_days} agent_response={config.agent_response_retention_days} "
+          f"proposal={config.proposal_retention_days} | weekly_archives={config.keep_weekly_archives}")
+    print(f"Prompt caps: daily_summaries={config.max_daily_summaries_in_prompt} "
+          f"lessons={config.max_lessons_in_prompt} | playbook cap/team={config.max_playbook_lessons_per_team}")
+    for tid in teams:
+        inv = inventory(tid, config)
+        print(f"\n================ {tid} ================")
+        for c in inv.categories:
+            size_kb = c.total_bytes / 1024.0
+            print(f"  [{c.category}] {c.path}")
+            print(f"     files={c.file_count} size={size_kb:,.1f}KB oldest={c.oldest} newest={c.newest} "
+                  f"retention={c.retention_days}d eligible_for_cleanup={c.eligible_for_cleanup}")
+            if c.malformed:
+                print(f"     MALFORMED ({len(c.malformed)}): {', '.join(Path(m).name for m in c.malformed)}")
+        print(f"  Playbook: total={inv.playbook_total} active={inv.playbook_active} retired={inv.playbook_retired}")
+        print(f"  Scorecard available: {inv.scorecard_available}")
+        print(f"  Next cleanup: {inv.next_cleanup_note}")
+
+
+def run_memory_maintenance(team: str = "both", *, apply: bool = False) -> None:
+    """Archive+delete eligible old runtime memory (dry-run unless --apply)."""
+
+    from src.competition.memory_config import MemoryConfig
+    from src.competition.memory_maintenance import run_maintenance
+
+    config = MemoryConfig.from_env()
+    teams = _normalize_team_arg(team)
+    mode = "APPLY" if apply else "DRY-RUN"
+    print(f"=== memory-maintenance [{mode}] (Phase 7W; paper-only) ===")
+    if not apply:
+        print("Dry-run: no files are archived or deleted. Re-run with --apply to act.")
+    for tid in teams:
+        report = run_maintenance(tid, config, apply=apply)
+        t = report.as_dict()["totals"]
+        print(f"\n-- {tid}: archived={t['archived']} deleted={t['deleted']} skipped={t['skipped']} --")
+        for a in report.actions[:25]:
+            print(f"   [{a.category}] {a.action}: {Path(a.path).name} ({a.reason})")
+        if len(report.actions) > 25:
+            print(f"   ... and {len(report.actions) - 25} more (see saved report)")
+    print("\nGuards: never deletes today's data, current/latest summary, current position-thesis records, "
+          "or durable playbook lessons; never touches .env/source/DB/Git/user notes.")
+
+
+def _recent_daily_learnings(team_id: str, max_n: int):
+    """Load the newest ``max_n`` daily-learning artifacts for a team (compact)."""
+
+    from src.competition.daily_learning import DEFAULT_LEARNING_DIR
+
+    directory = DEFAULT_LEARNING_DIR
+    if not directory.exists():
+        return []
+    files = sorted(directory.glob(f"{team_id}_*.json"), key=lambda p: p.name, reverse=True)[:max_n]
+    out = []
+    for path in files:
+        try:
+            out.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:  # noqa: BLE001 - skip corrupt artifact
+            continue
+    return out
+
+
+def _build_and_save_weekly(tid: str, settings: Settings):
+    """Build the weekly review, apply deterministic playbook updates, and save. No orders."""
+
+    from src.competition.memory_config import MemoryConfig
+    from src.competition.memory_retrieval import load_recent_daily_summaries
+    from src.competition.playbook import TeamPlaybook
+    from src.competition.weekly_synthesis import (
+        build_weekly_review, render_weekly_discord, render_weekly_markdown, save_weekly_review,
+    )
+
+    config = MemoryConfig.from_env()
+    review = _team_portfolio_review_for(tid, settings)
+    playbook = TeamPlaybook.load(tid)
+    weekly = build_weekly_review(
+        tid, review=review,
+        recent_daily=load_recent_daily_summaries(tid, max_n=7),
+        recent_learnings=_recent_daily_learnings(tid, 7),
+        playbook=playbook, config=config, attribution_entries=load_team_attribution(tid),
+    )
+    playbook.save()  # promotions/supersessions/cap applied deterministically
+    saved = save_weekly_review(weekly)
+    return weekly, render_weekly_markdown(weekly), render_weekly_discord(weekly), saved
+
+
+def _auto_run_weekly_for_team(
+    tid: str, settings: Settings, *, clock: dict | None, calendar_day: dict | None,
+    force: bool = False, dry_run: bool = False,
+) -> dict:
+    """Eligibility-gated weekly synthesis with retry-safe delivery state. Never trades."""
+
+    from src.competition.weekly_delivery import (
+        WeeklyRecord, get_weekly_record, upsert_weekly_record, weekly_run_eligible,
+    )
+    from src.competition.weekly_synthesis import iso_week_tag
+
+    week_tag = iso_week_tag()
+    market_open = clock.get("is_open") if clock else None
+    next_open = clock.get("next_open") if clock else None
+    eligible, reason = weekly_run_eligible(
+        tid, clock_is_open=market_open, calendar_day=calendar_day,
+        next_open_iso=next_open, force=force,
+    )
+    if not eligible:
+        return {"team": tid, "week": week_tag, "ran": False, "reason": reason}
+    if dry_run:
+        return {"team": tid, "week": week_tag, "ran": False, "reason": "dry-run: would run weekly"}
+
+    _weekly, _md, discord_msg, _saved = _build_and_save_weekly(tid, settings)
+    record = get_weekly_record(tid, week_tag)
+    record.generated = True
+    record.attempts += 1
+    record.last_attempt_at = now_utc().isoformat()
+    upsert_weekly_record(record)
+
+    sent, channel = _send_eod_to_discord(tid, discord_msg)
+    record.delivered = bool(sent)
+    record.destination = channel
+    record.error = None if sent else (
+        "discord_not_configured" if channel in ("disabled", "no_channel") else f"send_failed:{channel}"
+    )
+    upsert_weekly_record(record)
+    return {"team": tid, "week": week_tag, "ran": True, "delivered": sent, "destination": channel}
+
+
+def _maybe_run_weekly(teams: list[str], settings: Settings, *, market_open: bool | None,
+                      dry_run_loop: bool) -> None:
+    """Called each iteration: after the last regular session of the week, run weekly synthesis."""
+
+    if market_open is not False:
+        return
+    if os.getenv("AUTO_WEEKLY_REVIEW", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    clock = _cheap_loop_clock_snapshot(settings)
+    calendar_day = None
+    try:
+        client = _safe_read_client(teams[0], settings)
+        if client is not None and client.has_credentials():
+            calendar_day = client.get_calendar_day(ny_trading_date())
+    except Exception:  # noqa: BLE001
+        calendar_day = None
+    for tid in teams:
+        try:
+            res = _auto_run_weekly_for_team(tid, settings, clock=clock, calendar_day=calendar_day,
+                                            dry_run=dry_run_loop)
+            if res.get("ran"):
+                print(f"[weekly] {tid}: ran for {res['week']} (delivered={res.get('delivered')} #{res.get('destination')})")
+        except Exception as exc:  # noqa: BLE001 - weekly must never crash the loop
+            print(f"[weekly] {tid}: auto-weekly error: {exc}")
+
+
+def run_weekly_team_review(team: str = "both", *, send: bool = False) -> None:
+    """Non-trading weekly synthesis: summarize the week + update the durable playbook
+    through deterministic evidence gates. Never trades or changes settings."""
+
+    settings = Settings.from_env()
+    teams = _normalize_team_arg(team)
+    print("=== weekly-team-review (paper-only; READ-ONLY; submits NO orders) ===")
+    for tid in teams:
+        weekly, md, discord_msg, saved = _build_and_save_weekly(tid, settings)
+        print("")
+        print(md)
+        print(f"\n(saved: {saved['markdown']} / {saved['json']}; playbook now {weekly.playbook_active_after} active lessons)")
+        if send:
+            sent, channel = _send_eod_to_discord(tid, discord_msg)
+            print(f"(weekly Discord post: {'sent #' + channel if sent else 'not sent [' + channel + ']'})")
+
+
+def run_weekly_review_status(team: str = "both") -> None:
+    """Read-only weekly review delivery status for the current ISO week. No secrets."""
+
+    from src.competition.weekly_delivery import get_weekly_record
+    from src.competition.weekly_synthesis import iso_week_tag
+
+    teams = _normalize_team_arg(team)
+    week_tag = iso_week_tag()
+    print("=== weekly-review-status (Phase 7X; paper-only; READ-ONLY; no secrets) ===")
+    print(f"Current ISO week: {week_tag}")
+    for tid in teams:
+        rec = get_weekly_record(tid, week_tag)
+        print(f"\n-- {tid} --")
+        print(f"  generated:   {rec.generated}")
+        print(f"  delivered:   {rec.delivered}")
+        print(f"  destination: {rec.destination or 'n/a'}")
+        print(f"  attempts:    {rec.attempts} (last {rec.last_attempt_at or 'never'})")
+        print(f"  error:       {rec.error or 'none'}")
+        print(f"  retry_pending: {rec.retry_pending}")
+
+
+def _gather_loop_health(stale_threshold_seconds: int):
+    """Assemble LoopHealth from the tracked PID + heartbeat + per-team audit."""
+
+    from src.competition.loop_heartbeat import heartbeat_age_seconds, read_heartbeat
+    from src.competition.loop_watchdog import TeamLoopStatus, assess_loop_health
+    from src.competition.iteration_audit import latest_status_age_seconds, load_latest_status
+
+    pid, alive = _tracked_loop_pid()
+    heartbeat = read_heartbeat()
+    age = heartbeat_age_seconds(heartbeat)
+    per_team = []
+    for tid in WEEK_TEAMS:
+        iso, t_age = latest_status_age_seconds(tid)
+        status = load_latest_status(tid) or {}
+        per_team.append(TeamLoopStatus(
+            team_id=tid, last_iteration_at=iso, last_iteration_age_seconds=t_age,
+            last_cycle_action=status.get("cycle_action"),
+            last_exception=status.get("exception_text"),
+        ))
+    return assess_loop_health(
+        pid=pid, process_alive=alive, heartbeat=heartbeat,
+        heartbeat_age_seconds=age, per_team=per_team,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+
+
+def _tracked_loop_pid():
+    """(pid, alive) for the tracked cheap loop. Degrades to (None, False)."""
+
+    try:
+        from src.ui.operator_controls import cheap_loop_pid_path
+        from src.ui.process_control import is_process_running, read_pid
+
+        pid = read_pid(cheap_loop_pid_path())
+        return pid, (is_process_running(pid) if pid is not None else False)
+    except Exception:  # noqa: BLE001
+        return None, False
+
+
+def run_loop_health(stale_threshold_seconds: int = 1800) -> None:
+    """Read-only loop liveness report (PID + heartbeat + per-team status)."""
+
+    health = _gather_loop_health(stale_threshold_seconds)
+    print("=== loop-health (Phase 7W; paper-only; READ-ONLY) ===")
+    print(f"PID: {health.pid} | process_alive: {health.process_alive}")
+    print(f"Last heartbeat: {health.last_heartbeat_at} | age: "
+          f"{'n/a' if health.heartbeat_age_seconds is None else f'{health.heartbeat_age_seconds:.0f}s'}")
+    print(f"Market state (heartbeat): {health.market_state} | graceful_shutdown: {health.graceful_shutdown}")
+    for t in health.teams:
+        age = "n/a" if t.last_iteration_age_seconds is None else f"{t.last_iteration_age_seconds:.0f}s"
+        print(f"  [{t.team_id}] last_iteration={t.last_iteration_at} ({age}) "
+              f"action={t.last_cycle_action} last_exception={t.last_exception or 'none'}")
+    print(f"Restart recommended: {health.restart_recommended} - {health.reason}")
+
+
+def _watchdog_log(message: str) -> None:
+    from src.competition.loop_heartbeat import heartbeat_path  # reuse runtime dir
+
+    log_path = heartbeat_path().parent / "watchdog.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{now_utc().isoformat()} {message}\n")
+    except Exception:  # noqa: BLE001 - logging must never crash the watchdog
+        pass
+
+
+def run_loop_watchdog(
+    *, team: str = "both", sleep_seconds: int = 900, stale_threshold_seconds: int = 1800,
+    once: bool = False, dry_run: bool = False,
+) -> None:
+    """Keep the competition loop alive: restart it when dead/stale. Never trades.
+
+    Reuses the gated ``start_cheap_loop`` spawner (same project Python; refuses
+    duplicates). Will not start while the kill switch is engaged or during a known
+    graceful shutdown. With --dry-run it assesses + logs but never spawns.
+    """
+
+    import time as _time
+    from src.competition.loop_watchdog import run_watchdog_once
+    from src.ui.operator_controls import detect_cheap_loop_processes, start_cheap_loop
+
+    print(f"=== loop-watchdog (Phase 7W; paper-only) team={team} sleep={sleep_seconds}s "
+          f"stale_threshold={stale_threshold_seconds}s dry_run={dry_run} ===")
+    while True:
+        health = _gather_loop_health(stale_threshold_seconds)
+        ks = read_kill_switch()
+        duplicates = []
+        try:
+            duplicates = detect_cheap_loop_processes()
+        except Exception:  # noqa: BLE001 - detection best-effort
+            duplicates = []
+
+        def _starter():
+            if dry_run:
+                from types import SimpleNamespace
+                return SimpleNamespace(success=False, message="dry-run: restart suppressed")
+            return start_cheap_loop(sleep_seconds=sleep_seconds, team=team,
+                                    python_executable=sys.executable)
+
+        result = run_watchdog_once(
+            health=health, kill_switch_engaged=ks.engaged,
+            detected_duplicates=duplicates, starter=_starter,
+        )
+        line = f"action={result.action} restarted={result.restarted} detail={result.detail}"
+        print(line)
+        _watchdog_log(line)
+        if once:
+            break
+        _time.sleep(sleep_seconds)
+
+
+def _write_iteration_audit(
+    *,
+    iteration: int,
+    team_id: str,
+    started_at: str,
+    market_state: str,
+    cycle_action: str,
+    gate_decision,
+    kill_switch_engaged: bool,
+    exception_text: str | None,
+    settings: Settings,
+    portfolio_result: dict | None = None,
+) -> None:
+    """Append one durable per-iteration audit record (no secrets, broker-free).
+
+    Counts/account come from the freshly-written post-cycle scorecard; bounded
+    prompt-memory metadata and the portfolio-action state come from the runtime
+    metadata file + the loop's portfolio step. Best-effort: an audit failure
+    prints a notice but never crashes the loop, and an exception during the cycle
+    is always recorded here so a failure can never pass silently.
+    """
+
+    try:
+        from src.competition.iteration_audit import (
+            IterationAuditRecord,
+            append_iteration_record,
+            new_iteration_id,
+        )
+        from src.competition.prompt_memory import load_prompt_memory_metadata
+
+        scorecard = load_latest_scorecard(team_id)
+        permissions = TradingPermissions.from_env()
+        mem = load_prompt_memory_metadata(team_id) or {}
+        pr = portfolio_result or {}
+        record = IterationAuditRecord(
+            iteration_id=new_iteration_id(iteration),
+            iteration=iteration,
+            team_id=team_id,
+            started_at=started_at,
+            finished_at=now_utc().isoformat(),
+            market_state=market_state,
+            cycle_action=cycle_action,
+            kill_switch_engaged=kill_switch_engaged,
+            gate_should_run_full_cycle=getattr(gate_decision, "should_run_full_cycle", None),
+            gate_recommend_review_only=getattr(gate_decision, "recommend_review_only", None),
+            gate_reason=getattr(gate_decision, "reason", "") or "",
+            proposals_count=getattr(scorecard, "proposals_count", None) if scorecard else None,
+            approved_count=getattr(scorecard, "approved_count", None) if scorecard else None,
+            simulation_only_count=getattr(scorecard, "simulation_only_count", None) if scorecard else None,
+            rejected_count=getattr(scorecard, "rejected_count", None) if scorecard else None,
+            orders_submitted=getattr(scorecard, "orders_submitted", None) if scorecard else None,
+            broker_rejected_count=getattr(scorecard, "broker_rejected_count", None) if scorecard else None,
+            portfolio_decision_type=getattr(scorecard, "portfolio_decision_type", None) if scorecard else None,
+            portfolio_no_trade=getattr(scorecard, "portfolio_no_trade", None) if scorecard else None,
+            equity=getattr(scorecard, "current_equity", None) if scorecard else None,
+            cash=getattr(scorecard, "cash", None) if scorecard else None,
+            buying_power=getattr(scorecard, "buying_power", None) if scorecard else None,
+            max_daily_orders_per_team=permissions.max_daily_orders_per_team,
+            memory_daily_summaries_included=mem.get("daily_summaries_included"),
+            memory_lesson_ids_included=mem.get("lesson_ids_included"),
+            memory_scorecard_included=mem.get("scorecard_included"),
+            memory_bounded_context_chars=mem.get("bounded_context_chars"),
+            memory_malformed_sources=mem.get("malformed_or_unavailable"),
+            portfolio_action_recommended=pr.get("recommended"),
+            portfolio_action_eligible=pr.get("eligible"),
+            portfolio_action_submitted=pr.get("submitted"),
+            portfolio_action_rejected_reason=pr.get("rejected_reason"),
+            new_buys_blocked_reason=pr.get("new_buys_blocked_reason"),
+            exception_text=exception_text,
+        )
+        append_iteration_record(record)
+    except Exception as exc:  # noqa: BLE001 - audit must never crash the loop
+        print(f"(iteration audit unavailable for {team_id}: {exc}; continuing loop)")
+
+
+def _run_portfolio_management(
+    tid: str, settings: Settings, *, dry_run_loop: bool, kill_switch_engaged: bool,
+) -> dict:
+    """Deterministic portfolio review + safe long-only sell-to-close BEFORE new buys.
+
+    Reviews refreshed positions, produces hold/trim/exit/watch recommendations, and
+    executes only eligible long trims/exits (capped to refreshed held qty; never
+    shorts) when ``ENABLE_PAPER_SELL_TO_CLOSE`` is on. Returns the portfolio-action
+    audit fields and whether new buys must be blocked. Never submits a new buy.
+    """
+
+    from src.competition.position_review import ACTION_EXIT, ACTION_TRIM, build_team_portfolio_review
+    from src.competition.position_execution import PositionActionProposal, execute_sell_to_close
+    from src.config.portfolio_limits import PortfolioLimits
+
+    result = {
+        "recommended": "none", "eligible": False, "submitted": 0,
+        "rejected_reason": None, "new_buys_blocked": False, "new_buys_blocked_reason": None,
+        "proceed_new_buys": True,
+    }
+    limits = PortfolioLimits.from_env()
+    account = _account_context_for_source(tid, settings, reconcile_orders=False)
+    raw_positions = _gather_team_positions(tid, settings)
+    attribution = load_team_attribution(tid)
+    review = build_team_portfolio_review(
+        tid, equity=account.equity, cash=account.cash, buying_power=account.buying_power,
+        raw_positions=raw_positions, attribution_entries=attribution, limits=limits,
+    )
+
+    blocked = review.health.block_new_buys
+    result["new_buys_blocked"] = blocked
+    result["proceed_new_buys"] = not blocked
+    if blocked:
+        result["new_buys_blocked_reason"] = review.health.block_new_buys_reason
+
+    recs = [
+        (p.symbol, p.recommended_action, p.reason)
+        for p in review.positions if p.recommended_action in (ACTION_TRIM, ACTION_EXIT)
+    ]
+    result["recommended"] = ";".join(f"{a}:{s}" for s, a, _ in recs) or "none"
+    if not recs:
+        return result
+
+    proposals = [PositionActionProposal(symbol=s, action=a, reason=r) for s, a, r in recs]
+    submit_dry = settings.dry_run or dry_run_loop or kill_switch_engaged
+    client = None
+    if not submit_dry and limits.enable_paper_sell_to_close:
+        try:
+            client = client_for_source(tid, base_settings=settings, options_adapter=_options_adapter_from_env())
+        except Exception as exc:  # noqa: BLE001 - missing creds -> validate-only, never submit
+            print(f"({tid} sell-to-close broker unavailable: {exc}; recommendations only)")
+            client = None
+
+    records = execute_sell_to_close(
+        proposals, client=client, dry_run=submit_dry, limits=limits,
+        refresh_positions=lambda: _gather_team_positions(tid, settings),
+    )
+    result["submitted"] = sum(1 for r in records if r.submitted)
+    result["eligible"] = any(not r.detail.startswith("Rejected by deterministic risk") for r in records)
+    rejects = [r for r in records if r.detail.startswith("Rejected by deterministic risk") or r.broker_rejected]
+    if rejects:
+        result["rejected_reason"] = rejects[0].broker_reject_reason or rejects[0].detail
+    for r in records:
+        print(f"[{tid}] sell-to-close {r.action} {r.symbol}: submitted={r.submitted} {r.detail}")
+    return result
+
+
 def run_cheap_competition_loop(
     *,
     once: bool = False,
@@ -866,9 +1860,13 @@ def run_cheap_competition_loop(
     import os
     import time as _time
 
+    from src.competition.loop_heartbeat import mark_graceful_shutdown, write_heartbeat
+
     sleep_fn = sleep_fn or _time.sleep
     teams = list(WEEK_TEAMS) if team == "both" else [team]
     iteration = 0
+    _loop_pid = os.getpid()
+    _loop_started_at = now_utc().isoformat()
     review_only_during_market_hours = os.getenv(
         "REVIEW_ONLY_DURING_MARKET_HOURS", "true"
     ).strip().lower() in {"1", "true", "yes", "on"}
@@ -877,7 +1875,8 @@ def run_cheap_competition_loop(
     quiet_config = OffHoursQuietConfig.from_env()
     off_hours_notice_shown = False
 
-    while True:
+    try:
+      while True:
         iteration += 1
         print(f"=== Cheap competition loop iteration {iteration} (paper-only; dry_run_loop={dry_run_loop}) ===")
         ks = read_kill_switch()
@@ -886,6 +1885,27 @@ def run_cheap_competition_loop(
 
         market_open = _cheap_loop_market_open() if market_hours_only else None
         market_closed = market_hours_only and market_open is False
+        # Phase 7W: heartbeat every iteration so liveness needs PID *and* freshness.
+        _hb_state = "open" if market_open is True else ("closed" if market_open is False else "unknown")
+        write_heartbeat(pid=_loop_pid, iteration=iteration, market_state=_hb_state,
+                        started_at=_loop_started_at)
+
+        # Phase 7X: automatic once-per-team/trading-date EOD delivery after the
+        # regular close. Runs even under strict off-hours quiet mode (it is an
+        # explicitly bounded post-close action), is Alpaca clock/calendar gated
+        # (no weekends/holidays/pre-open), retry-safe, and never submits orders.
+        try:
+            _maybe_auto_send_eod(teams, Settings.from_env(), market_open=market_open,
+                                 dry_run_loop=dry_run_loop)
+        except Exception as exc:  # noqa: BLE001 - EOD must never crash the loop
+            print(f"(auto-EOD step error: {exc}; continuing loop)")
+        # Phase 7X: once-per-week synthesis after the last regular session of the week.
+        try:
+            _maybe_run_weekly(teams, Settings.from_env(), market_open=market_open,
+                              dry_run_loop=dry_run_loop)
+        except Exception as exc:  # noqa: BLE001 - weekly must never crash the loop
+            print(f"(auto-weekly step error: {exc}; continuing loop)")
+
         strict_quiet = quiet_config.quiet_when_closed(market_open)
         if market_open is not False:
             # Reset the once-per-stretch notice whenever the market is not closed.
@@ -936,6 +1956,9 @@ def run_cheap_competition_loop(
         market_state = "open" if market_open is True else ("closed" if market_open is False else "unknown")
 
         for tid in teams:
+            iteration_started_at = now_utc().isoformat()
+            cycle_action = "cheap_skip"
+            exception_text: str | None = None
             decision, _gate_config = _evaluate_team_cheap_gate(tid)
             print(
                 f"[{tid}] gate: should_run_full_cycle={decision.should_run_full_cycle} "
@@ -947,34 +1970,76 @@ def run_cheap_competition_loop(
                 and not (market_closed and review_only_during_market_hours)
             )
 
-            if allow_full:
-                cycle_action = "full_cycle"
-                if dry_run_loop:
-                    print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm")
+            # Phase 7U: the cycle path is wrapped so a transient failure (e.g. the
+            # LLM provider raising / SystemExit) can NEVER silently kill the loop
+            # or pass without a visible audit record + console line.
+            portfolio_result: dict | None = None
+            try:
+                if allow_full:
+                    if dry_run_loop:
+                        cycle_action = "full_cycle"
+                        print(f"[dry-run] [{tid}] would run: portfolio review + safe sell-to-close (reductions before new buys)")
+                        print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm")
+                    else:
+                        # Phase 7X: (a) refresh + health, (b/c/d) review existing positions,
+                        # (e/f/g) execute eligible long trims/exits BEFORE any new buys.
+                        portfolio_result = _run_portfolio_management(
+                            tid, Settings.from_env(), dry_run_loop=dry_run_loop,
+                            kill_switch_engaged=ks.engaged,
+                        )
+                        if portfolio_result.get("new_buys_blocked"):
+                            # No new stock-long buy when deterministic health requires reduction;
+                            # still run review/learning (no new orders).
+                            cycle_action = "managed_review_only"
+                            print(f"[{tid}] new buys BLOCKED: {portfolio_result.get('new_buys_blocked_reason')}")
+                            run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                        else:
+                            cycle_action = "full_cycle"
+                            run_week_cycle_cli(team=tid, proposal_source="llm")
+                elif allow_review_when_skipped:
+                    # Gate skipped a full cycle: do advisory review-only + cheap LLM
+                    # critique/summary stages. NEVER runs the expensive strategy model
+                    # and NEVER submits orders.
+                    cycle_action = "review_only"
+                    if dry_run_loop:
+                        print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
+                        if llm_review_when_skipped:
+                            print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
+                    else:
+                        run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                        if llm_review_when_skipped:
+                            try:
+                                run_llm_daily_review(team=tid)
+                            except Exception as exc:  # noqa: BLE001 - advisory step must not kill the loop
+                                print(f"({tid} llm-daily-review unavailable: {exc}; continuing loop)")
                 else:
-                    run_week_cycle_cli(team=tid, proposal_source="llm")
-            elif allow_review_when_skipped:
-                # Gate skipped a full cycle: do advisory review-only + cheap LLM
-                # critique/summary stages. NEVER runs the expensive strategy model
-                # and NEVER submits orders.
-                cycle_action = "review_only"
-                if dry_run_loop:
-                    print(f"[dry-run] [{tid}] would run: run-week-cycle --proposal-source llm --review-only")
-                    if llm_review_when_skipped:
-                        print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
-                else:
-                    run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
-                    if llm_review_when_skipped:
-                        try:
-                            run_llm_daily_review(team=tid)
-                        except Exception as exc:  # noqa: BLE001 - advisory step must not kill the loop
-                            print(f"({tid} llm-daily-review unavailable: {exc}; continuing loop)")
-            else:
-                cycle_action = "market_closed" if market_closed else "cheap_skip"
-                if market_closed and review_only_during_market_hours and (run_review_only_when_skipped or llm_review_when_skipped):
-                    print(f"[{tid}] market closed; review-only/LLM review skipped.")
-                else:
-                    print(f"[{tid}] staying cheap this iteration (no full cycle).")
+                    cycle_action = "market_closed" if market_closed else "cheap_skip"
+                    if market_closed and review_only_during_market_hours and (run_review_only_when_skipped or llm_review_when_skipped):
+                        print(f"[{tid}] market closed; review-only/LLM review skipped.")
+                    else:
+                        print(f"[{tid}] staying cheap this iteration (no full cycle).")
+            except SystemExit as exc:
+                exception_text = f"SystemExit({exc.code}) during {cycle_action}"
+                print(f"!! [{tid}] cycle aborted: {exception_text}; continuing loop (logged to audit).")
+                cycle_action = "error"
+            except Exception as exc:  # noqa: BLE001 - a cycle failure must not kill the loop
+                exception_text = f"{type(exc).__name__}: {exc}"
+                print(f"!! [{tid}] cycle FAILED: {exception_text}; continuing loop (logged to audit).")
+                cycle_action = "error"
+
+            # Phase 7U: durable per-iteration audit record (always written; no secrets).
+            _write_iteration_audit(
+                iteration=iteration,
+                team_id=tid,
+                started_at=iteration_started_at,
+                market_state=market_state,
+                cycle_action=cycle_action,
+                gate_decision=decision,
+                kill_switch_engaged=ks.engaged,
+                exception_text=exception_text,
+                settings=Settings.from_env(),
+                portfolio_result=portfolio_result,
+            )
 
             # Phase 7S: post a concise team-thought brief to that team's Discord channel.
             _post_discord_iteration_update(
@@ -1034,6 +2099,14 @@ def run_cheap_competition_loop(
             break
         print(f"Sleeping {sleep_seconds}s before next cheap iteration...")
         sleep_fn(sleep_seconds)
+      # Phase 7W: normal loop exit (e.g. --once) is an intentional shutdown.
+      mark_graceful_shutdown()
+    except KeyboardInterrupt:
+        print("Cheap loop interrupted by operator; marking graceful shutdown (watchdog will not restart).")
+        mark_graceful_shutdown()
+        raise
+    # Any other exception propagates WITHOUT a graceful marker, so the watchdog
+    # treats it as a crash and may restart the loop.
 
 
 def _run_quiet_off_hours_iteration(
@@ -2515,6 +3588,74 @@ def main() -> None:
         "--dry-run-loop", action="store_true",
         help="Print intended actions each iteration without running full cycles.",
     )
+    diagnose_loop_parser = subparsers.add_parser(
+        "diagnose-competition-loop",
+        help="Read-only diagnosis of why the cheap competition loop is/ isn't trading (no LLM, no orders).",
+    )
+    diagnose_loop_parser.add_argument(
+        "--team", choices=("team_alpha", "team_beta", "both"), default="both",
+        help="Team(s) to diagnose. Defaults to both.",
+    )
+    review_portfolio_parser = subparsers.add_parser(
+        "review-team-portfolio",
+        help="Read-only position review + portfolio health for a team (no LLM submit; never places orders).",
+    )
+    review_portfolio_parser.add_argument(
+        "--team", default="both",
+        help="Team(s) to review: alpha, beta, both (team_alpha/team_beta also accepted).",
+    )
+    eod_parser = subparsers.add_parser(
+        "export-eod-report",
+        help="Build+save the end-of-day report and daily learning artifact (read-only; --send to post).",
+    )
+    eod_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    eod_parser.add_argument(
+        "--force", action="store_true",
+        help="Build even if the market clock is open/unknown (preview). Still respects the once-per-day guard for --send.",
+    )
+    eod_parser.add_argument(
+        "--send", action="store_true",
+        help="Post the concise report to the team's Discord channel (once per ET trading date). Default: off.",
+    )
+    mem_status_parser = subparsers.add_parser(
+        "memory-status", help="Read-only inventory of per-team runtime memory (no secrets).",
+    )
+    mem_status_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    mem_maint_parser = subparsers.add_parser(
+        "memory-maintenance", help="Archive+delete eligible old runtime memory (dry-run unless --apply).",
+    )
+    mem_maint_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    mem_maint_parser.add_argument("--apply", action="store_true", help="Actually archive/delete (default: dry-run).")
+    mem_maint_parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run (default behavior).")
+    weekly_parser = subparsers.add_parser(
+        "weekly-team-review", help="Non-trading weekly synthesis + deterministic playbook update.",
+    )
+    weekly_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    weekly_parser.add_argument("--send", action="store_true", help="Post a short weekly summary to Discord.")
+    eod_status_parser = subparsers.add_parser(
+        "eod-report-status", help="Read-only EOD report delivery status for today (no secrets).",
+    )
+    eod_status_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    weekly_status_parser = subparsers.add_parser(
+        "weekly-review-status", help="Read-only weekly review delivery status (no secrets).",
+    )
+    weekly_status_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    loop_health_parser = subparsers.add_parser(
+        "loop-health", help="Read-only loop liveness (PID + heartbeat + per-team status).",
+    )
+    loop_health_parser.add_argument(
+        "--stale-threshold-seconds", type=int, default=1800,
+        help="Heartbeat age (s) beyond which the loop is considered stale. Default 1800.",
+    )
+    watchdog_parser = subparsers.add_parser(
+        "loop-watchdog", help="Keep the competition loop alive (restart on dead/stale). Never trades.",
+    )
+    watchdog_parser.add_argument("--team", default="both", help="Team(s) the loop should run: alpha, beta, both.")
+    watchdog_parser.add_argument("--sleep-seconds", type=int, default=900, help="Watchdog check interval. Default 900.")
+    watchdog_parser.add_argument("--stale-threshold-seconds", type=int, default=1800,
+                                 help="Heartbeat staleness threshold for restart. Default 1800.")
+    watchdog_parser.add_argument("--once", action="store_true", help="Run a single check and exit (testing/manual).")
+    watchdog_parser.add_argument("--dry-run", action="store_true", help="Assess + log but never restart.")
     subparsers.add_parser("week-competition-status", help="Show Alpha vs Beta competition status and ranking")
     subparsers.add_parser("stop-week-competition", help="Stop the weekly paper competition")
     learning_parser = subparsers.add_parser("team-learning-status", help="Show a team's learning ledger")
@@ -2669,6 +3810,30 @@ def main() -> None:
             llm_review_when_skipped=args.llm_review_when_skipped,
             llm_daily_review_at_close=args.llm_daily_review_at_close,
             dry_run_loop=args.dry_run_loop,
+        )
+    elif args.command == "diagnose-competition-loop":
+        run_diagnose_competition_loop(team=args.team)
+    elif args.command == "review-team-portfolio":
+        run_review_team_portfolio(team=args.team)
+    elif args.command == "export-eod-report":
+        run_export_eod_report(team=args.team, force=args.force, send=args.send)
+    elif args.command == "memory-status":
+        run_memory_status(team=args.team)
+    elif args.command == "memory-maintenance":
+        run_memory_maintenance(team=args.team, apply=args.apply)
+    elif args.command == "weekly-team-review":
+        run_weekly_team_review(team=args.team, send=args.send)
+    elif args.command == "eod-report-status":
+        run_eod_report_status(team=args.team)
+    elif args.command == "weekly-review-status":
+        run_weekly_review_status(team=args.team)
+    elif args.command == "loop-health":
+        run_loop_health(stale_threshold_seconds=args.stale_threshold_seconds)
+    elif args.command == "loop-watchdog":
+        run_loop_watchdog(
+            team=args.team, sleep_seconds=args.sleep_seconds,
+            stale_threshold_seconds=args.stale_threshold_seconds,
+            once=args.once, dry_run=args.dry_run,
         )
     elif args.command == "week-competition-status":
         run_week_competition_status()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,11 +50,89 @@ class AlpacaClientWrapper:
         clock = self._get_client().get_clock()
         return bool(clock.is_open)
 
+    def get_clock_snapshot(self) -> dict[str, Any]:
+        """Read-only market clock snapshot: is_open + next open/close as ISO strings.
+
+        Never submits anything. Used by the loop diagnostic; degrades fields to
+        ``None`` when the SDK does not expose them.
+        """
+
+        clock = self._get_client().get_clock()
+
+        def _iso(value: Any) -> str | None:
+            if value is None:
+                return None
+            iso = getattr(value, "isoformat", None)
+            return iso() if callable(iso) else str(value)
+
+        return {
+            "is_open": bool(getattr(clock, "is_open", False)),
+            "timestamp": _iso(getattr(clock, "timestamp", None)),
+            "next_open": _iso(getattr(clock, "next_open", None)),
+            "next_close": _iso(getattr(clock, "next_close", None)),
+        }
+
+    def get_calendar_day(self, day: "date") -> dict[str, Any] | None:
+        """Read-only Alpaca trading-calendar entry for ``day`` (None on non-trading days).
+
+        Returns ``{"date","open","close"}`` ISO strings for a trading day, or
+        ``None`` for weekends/holidays. Used to gate the end-of-day report so it
+        never fires on non-trading days or pre-open. Never submits.
+        """
+
+        from alpaca.trading.requests import GetCalendarRequest
+
+        entries = self._get_client().get_calendar(GetCalendarRequest(start=day, end=day))
+        for entry in (entries or []):
+            entry_date = getattr(entry, "date", None)
+            if entry_date is None:
+                continue
+            iso_date = entry_date.isoformat() if hasattr(entry_date, "isoformat") else str(entry_date)
+            if iso_date != day.isoformat():
+                continue
+
+            def _iso(v: Any) -> str | None:
+                if v is None:
+                    return None
+                return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+            return {"date": iso_date, "open": _iso(getattr(entry, "open", None)),
+                    "close": _iso(getattr(entry, "close", None))}
+        return None
+
+    def count_orders_since(self, after: "datetime") -> int:
+        """Count broker orders submitted at/after ``after`` (read-only).
+
+        Used to reconcile the per-team daily-order cap against actual paper
+        orders for the current trading date. Never submits; on any SDK/runtime
+        failure the caller is expected to degrade safely.
+        """
+
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        request = GetOrdersRequest(status=QueryOrderStatus.ALL, after=after, limit=500)
+        orders = self._get_client().get_orders(filter=request)
+        return len(list(orders or []))
+
     def submit_paper_order(self, order_request: OrderRequest) -> Any:
         """Submit a paper long stock order (existing Level 1 path)."""
 
         self._validate_order_request(order_request)
         return self._guarded_submit_stock(order_request, label="paper long stock")
+
+    def submit_paper_sell_to_close_order(self, order_request: OrderRequest) -> Any:
+        """Submit an approved reduce-only SELL that closes/reduces a long stock position.
+
+        This is the ONLY broker path that may reduce an existing long. It refuses
+        anything that could open or increase a short (``short``/``margin``/option
+        fields), and the deterministic gate that produced ``order_request`` has
+        already capped the quantity to the currently-held long shares. No shorting,
+        options, margin, or live trading is involved.
+        """
+
+        self._validate_sell_to_close_order(order_request)
+        return self._guarded_submit_stock(order_request, label="paper sell-to-close long")
 
     def submit_paper_short_order(self, order_request: OrderRequest) -> Any:
         """Submit an approved paper short stock order (Level 2)."""
@@ -120,9 +199,26 @@ class AlpacaClientWrapper:
         self._validate_common_paper_order(order_request)
         if order_request.asset_class != AssetClass.STOCK:
             raise ValueError("Only stock orders may be submitted to the long stock path.")
-        for field_name in ("option_symbol", "option_contract", "margin", "short"):
+        if order_request.action != TradeAction.BUY:
+            raise ValueError("Paper long stock orders must use the BUY action.")
+        for field_name in ("option_symbol", "option_contract", "margin", "short", "sell_to_close"):
             if getattr(order_request, field_name, None):
                 raise ValueError(f"Unsupported order field for paper long stock trading: {field_name}.")
+
+    def _validate_sell_to_close_order(self, order_request: OrderRequest) -> None:
+        self._validate_common_paper_order(order_request)
+        if order_request.asset_class != AssetClass.STOCK:
+            raise ValueError("Sell-to-close orders must be stock orders.")
+        if not order_request.sell_to_close:
+            raise ValueError("Sell-to-close path requires order_request.sell_to_close=True.")
+        if order_request.action != TradeAction.SELL:
+            raise ValueError("Sell-to-close orders must use the SELL action.")
+        if order_request.short:
+            raise ValueError("Sell-to-close must not set short=True (it can never open/increase a short).")
+        if order_request.margin:
+            raise ValueError("Sell-to-close must not set margin=True.")
+        if order_request.option_symbol or order_request.option_contract:
+            raise ValueError("Option fields are not valid on a sell-to-close stock order.")
 
     def _validate_short_order(self, order_request: OrderRequest) -> None:
         self._validate_common_paper_order(order_request)

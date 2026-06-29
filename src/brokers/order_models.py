@@ -56,6 +56,10 @@ class OrderRequest(BaseModel):
     # risk decision and routed through its dedicated, gated broker method.
     short: bool = False
     margin: bool = False
+    # Reduce-only SELL that closes/reduces an EXISTING long stock position. It can
+    # never open or increase a short; the deterministic gate caps quantity to the
+    # currently-held long shares. Mutually exclusive with short/margin/options.
+    sell_to_close: bool = False
     option_symbol: str | None = None
     option_contract: dict | None = None
     contracts: int | None = Field(default=None, gt=0)

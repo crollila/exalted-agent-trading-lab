@@ -22,3 +22,25 @@ def isolate_runtime_team_autonomy_config(tmp_path, monkeypatch):
     hermetic_path = tmp_path / "no_runtime_autonomy_override.json"
     monkeypatch.setattr(discord_bot, "DEFAULT_AUTONOMY_CONFIG_PATH", hermetic_path)
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_loop_audit_dir(tmp_path, monkeypatch):
+    """Keep the per-iteration loop audit log (Phase 7U) out of the real runtime dir.
+
+    Any test that exercises ``run_cheap_competition_loop`` writes one audit record
+    per team per iteration; without this fixture those land in the real
+    ``data/runtime/loop_audit`` path. Redirect the writer via ``LOOP_AUDIT_DIR`` so
+    tests never pollute developer runtime state.
+    """
+
+    monkeypatch.setenv("LOOP_AUDIT_DIR", str(tmp_path / "loop_audit"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_loop_heartbeat(tmp_path, monkeypatch):
+    """Keep the loop heartbeat (Phase 7W) out of the real runtime dir during tests."""
+
+    monkeypatch.setenv("LOOP_HEARTBEAT_PATH", str(tmp_path / "loop_heartbeat.json"))
+    yield
