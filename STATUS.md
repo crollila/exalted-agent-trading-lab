@@ -515,6 +515,60 @@ Not added (unchanged): live trading, options/short/margin execution, buy-to-cove
 - Policy (one consistent everywhere): usage = gross notional of SUBMITTED paper orders for the current ET trading date; rejected/cancelled/expired/simulation-only/prior-day excluded; **both entries and sell-to-close count** toward the cap; LLM output is never the authority.
 - `diagnose-competition-loop` prints `daily_notional_today=$X / max_daily_notional_per_team=$Y`, `source=broker|local_fallback`, `reconciliation_status=ok|fallback|unavailable` (no secrets). Tests added; full suite green (1107 passed).
 
+## Phase 7Z - candidate-generation integrity, fresh-state grounding, truthful SPY
+
+Closes the "full_cycle but proposals_count=0 with no reason and no exception" gap and stops
+stale runtime memory (old XYZ/SPY holdings, prior short exposure, an old low-buying-power lesson)
+from masquerading as live portfolio state. Delivered and tested:
+
+- **Fresh broker-state grounding** (`src/competition/broker_snapshot.py`): one immutable
+  `BrokerSnapshot` (source, timestamp, equity, cash, buying power, position/short counts, held
+  symbols, `account_read_ok`, `status`) is fetched ONCE per team per market-open full cycle and
+  threaded — unchanged — into the Portfolio Manager, candidate-generation context, routing/execution,
+  and the cycle audit. A failed live read becomes `account_state_unavailable`; the system never
+  pretends positions are zero or cash is available. `run-week-cycle` builds it once and reuses it
+  (positions are not re-fetched for the PM).
+- **Current vs historical reconciliation** (`src/competition/state_reconciliation.py`): deterministically
+  marks conflicts (historical XYZ holding vs broker position count zero; historical low-buying-power
+  claim vs current healthy buying power; historical short exposure vs no current short) and tags old
+  history inactive/stale for the cycle while preserving it for audit. Statuses: `clean`,
+  `stale_context_corrected`, `account_state_unavailable`, `live_portfolio_health_block`.
+- **Candidate-generation auditability** (`src/competition/candidate_generation.py`): records the
+  pipeline stages (PM allowance, candidate-generation allowance, model/provider call outcome, parsed
+  proposal count, routing result, deterministic risk result) and persists a machine-readable
+  `candidate_generation_outcome` plus exactly one `no_trade_reason_class` — never null after a
+  completed cycle: `no_current_signal`, `portfolio_manager_hold`, `candidate_generation_disabled`,
+  `provider_failure`, `invalid_model_output`, `model_zero_candidates`, `risk_rejected`,
+  `daily_cap_reached`, `autonomy_disabled`, `account_state_unavailable`, `live_portfolio_health_block`.
+  The routed provider/model NAMES and a failure category are recorded (never secrets or raw prompt
+  text). A healthy zero-position/full-cash account always **reaches** candidate generation; historical
+  losses or a stale playbook item alone can never indefinitely force `max_new=0` (the failure-streak
+  tightening keeps ≥1 slot on a healthy, candidate-bearing cycle). No trade is ever forced.
+- **Portfolio Manager evidence** (`portfolio_manager.py`): every no-trade decision now names its
+  current-data evidence source (`current_account_state`/`current_positions`/`current_cap_usage`/
+  `current_market_research_evidence`/`current_spy_relative_performance`). An LLM hold/no-trade with no
+  current condition supporting it is downgraded to advisory, not a hard candidate-generation block.
+  Deterministic risk, daily caps, the kill switch, and all broker gates are unchanged.
+- **Bounded memory split** (`prompt_memory.py`): the prompt clearly separates **CURRENT VERIFIED
+  PORTFOLIO STATE** (authoritative live broker facts) from **HISTORICAL RESEARCH FEEDBACK** (non-binding
+  context), attaches compact stale-vs-live conflict warnings, and — when the account is unavailable —
+  states positions/cash are UNKNOWN. Bounded-context limits are preserved; no raw prompts are saved.
+- **Benchmark integrity** (`src/competition/benchmark.py`): same-period anchors (team start/end equity,
+  SPY start/end price, period start/end, timeframe `intraday`/`weekly`/`all_time`). Team return, SPY
+  return, and excess are computed only from those shared anchors; missing anchors render `n/a` (never a
+  false "beat"/"lost to" SPY). Corrected the Discord scoreboard/brief math that mixed a live team return
+  with a stale SPY return (the bug that could show `+1.13%` excess when team return was `0.0000` and SPY
+  `-0.0012`; the valid excess is `+0.0012`).
+- **Diagnostics + reports**: `diagnose-competition-loop --team both` now prints the current broker
+  snapshot source/timestamp/read-ok, the reconciliation status + conflict details, the candidate-generation
+  allowance + outcome, the exact no-trade reason class, the provider/model outcome category, and the
+  benchmark timeframe + anchor availability. The Discord iteration brief surfaces the no-trade reason class,
+  a grounding line (account-read-ok + reconciliation), and a same-period SPY-relative claim; EOD reports
+  keep `n/a` when anchors are missing. Strict off-hours quiet mode is unchanged.
+
+No live trading, forced daily trades, weakened deterministic risk, LLM order authority, Alpaca account
+mutation, or secret printing was added. Full suite green (1147 passed).
+
 ## Next step
 
 Run `diagnose-competition-loop --team both` to confirm the live blocker per team (currently `team_alpha=PYTHON_RISK_REJECTED` from exhausted buying power, `team_beta=MARKET_CLOSED`/healthy no-trade), reconcile or reset the over-leveraged `team_alpha` paper account if desired, then run the loop under `loop-watchdog` and inspect memory with `memory-status` / clean with `memory-maintenance --dry-run`. Only then design deterministic paper short/margin/options risk gates before allowing any advanced paper order path.
