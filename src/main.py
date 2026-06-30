@@ -335,6 +335,139 @@ def _account_context_for_source(
     )
 
 
+def _broker_snapshot_for_source(
+    source: str, settings: Settings, *, reconcile_usage: bool = True
+):
+    """Build ONE immutable current-cycle BrokerSnapshot for a team (Phase 7Z).
+
+    The team's paper account is read once (via ``diagnose_source``) and positions
+    once (read-only); the same snapshot is threaded into the Portfolio Manager,
+    candidate-generation context, routing/execution, and the cycle audit. A failed
+    live read returns an ``account_state_unavailable`` snapshot — never a pretend
+    flat/funded book. Team sources never fall back to global credentials.
+    """
+
+    from src.competition.broker_snapshot import build_snapshot_from_parts, unavailable_snapshot
+
+    orders_today = _orders_today_for_source(source, settings) if reconcile_usage else 0
+    daily_notional = (
+        _daily_notional_for_source(source, settings).used if reconcile_usage else 0.0
+    )
+    as_of = ny_trading_date()
+    diagnosis = diagnose_source(source, base_settings=settings)
+    if not (diagnosis.auth_ok and diagnosis.account):
+        return unavailable_snapshot(
+            source,
+            classification=diagnosis.classification,
+            orders_today=orders_today,
+            daily_notional_today=daily_notional,
+            as_of=as_of,
+        )
+    raw_positions = _gather_team_positions(source, settings)
+    return build_snapshot_from_parts(
+        source,
+        account=diagnosis.account,
+        raw_positions=raw_positions,
+        account_read_ok=True,
+        orders_today=orders_today,
+        daily_notional_today=daily_notional,
+        as_of=as_of,
+    )
+
+
+def _reconcile_team_state(team: str, snapshot, settings: Settings):
+    """Reconcile a fresh snapshot against historical memory (Phase 7Z).
+
+    Historical holdings/lessons/scorecards are research feedback only; this marks
+    conflicts (stale holding, stale low-buying-power claim, stale short exposure)
+    so they can never masquerade as live state. A genuine CURRENT low-buying-power
+    or negative-cash condition is reported as ``live_portfolio_health_block``.
+    """
+
+    from src.competition.portfolio_manager import PortfolioManagerConfig
+    from src.competition.state_reconciliation import (
+        historical_signals_from_memory,
+        reconcile_state,
+    )
+
+    pm = PortfolioManagerConfig.from_env()
+    # Most-recent distinct symbols this team previously SUBMITTED as long entries —
+    # the holdings stale memory is most likely to still reference. Capped to keep
+    # the reconciliation (and the bounded prompt) compact.
+    prior_held: list[str] = []
+    try:
+        seen: set[str] = set()
+        for entry in reversed(load_team_attribution(team)):
+            asset_type = str(getattr(entry, "asset_type", "") or "")
+            if (
+                getattr(entry, "broker_submitted", False)
+                and "short" not in asset_type
+                and not asset_type.startswith("option")
+            ):
+                sym = str(getattr(entry, "symbol", "") or "").upper()
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    prior_held.append(sym)
+            if len(prior_held) >= 8:
+                break
+    except Exception:  # noqa: BLE001 - missing/old attribution must never crash the cycle
+        prior_held = []
+
+    ledger = TeamLearningLedger.load(team)
+    scorecard = load_latest_scorecard(team)
+    signals = historical_signals_from_memory(
+        prior_held_symbols=prior_held,
+        ledger_lessons=list(ledger.latest_lessons() or []) + list(getattr(ledger, "risk_notes", []) or []),
+        scorecard=scorecard,
+    )
+
+    health_block = False
+    health_reason: str | None = None
+    if snapshot.is_available:
+        ratio = snapshot.buying_power_ratio()
+        if snapshot.cash is not None and snapshot.cash < 0:
+            health_block = True
+            health_reason = "Negative cash on the live account blocks new-money buys."
+        elif ratio is not None and ratio < pm.low_buying_power_review_threshold_pct:
+            health_block = True
+            health_reason = "Low buying power on the live account blocks new-money buys."
+
+    return reconcile_state(
+        snapshot,
+        signals,
+        low_buying_power_threshold_pct=pm.low_buying_power_review_threshold_pct,
+        current_health_block=health_block,
+        current_health_reason=health_reason,
+    )
+
+
+def _benchmark_timeframe_for(state) -> str:
+    """Timeframe label for the run-week-cycle benchmark (weekly competition)."""
+
+    from src.competition.benchmark import TIMEFRAME_WEEKLY
+
+    return TIMEFRAME_WEEKLY
+
+
+_TEAM_AUTONOMY_ENVS = {
+    "team_alpha": "TEAM_ALPHA_AUTONOMY_ENABLED",
+    "team_beta": "TEAM_BETA_AUTONOMY_ENABLED",
+}
+
+
+def _team_autonomy_enabled(team: str) -> bool:
+    """Read the REAL per-team autonomy flag (TEAM_*_AUTONOMY_ENABLED), default False.
+
+    Used for diagnostics + candidate-outcome classification only — it never adds or
+    weakens an execution gate. The deterministic risk engine, daily caps, and the
+    kill switch remain the authoritative submission gates.
+    """
+
+    env_name = _TEAM_AUTONOMY_ENVS.get(team)
+    raw = (os.getenv(env_name, "") if env_name else "") or ""
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 VALID_PROPOSAL_SOURCES = ("default", "llm")
 
 
@@ -425,14 +558,59 @@ def run_start_week_competition() -> None:
         print("Starting SPY price: unknown (market data unavailable; SPY benchmark will be unknown).")
 
 
-def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_only: bool = False) -> None:
+def run_week_cycle_cli(
+    team: str,
+    proposal_source: str | None = None,
+    review_only: bool = False,
+    *,
+    fail_fast_on_provider_error: bool = True,
+) -> None:
     settings = Settings.from_env()
     permissions = TradingPermissions.from_env()
     source_name = _resolve_proposal_source_name(proposal_source)
     if review_only:
         print("Review-only cycle: portfolio/strategy review + memory only; NO new broker orders.")
-    # Account context uses the TEAM's own credentials only — never global.
-    account = _account_context_for_source(team, settings)
+
+    # For the LLM source, validate the routed provider FIRST — before any broker
+    # read. As a CLI command (fail_fast_on_provider_error=True) a missing/blank key
+    # fails fast without touching the broker. In the autonomous loop
+    # (fail_fast_on_provider_error=False) we instead run a GROUNDED provider_failure
+    # cycle so the blank-key state is recorded as `provider_failure` on the
+    # scorecard/audit — never a silent zero that looks like model_zero_candidates.
+    provider = None
+    provider_unavailable_reason: str | None = None
+    if source_name == "llm":
+        try:
+            # Strategy/proposal generation is the high-value path -> strategy model.
+            provider = build_routed_provider("strategy")
+        except LLMProviderError as exc:
+            if fail_fast_on_provider_error:
+                print(f"LLM proposal source unavailable: {exc}")
+                raise SystemExit(f"provider_unavailable: {exc}") from exc
+            provider_unavailable_reason = str(exc)
+            print(
+                f"(LLM proposal source unavailable: {exc}; recording a grounded "
+                "provider_failure cycle — no LLM call, no orders.)"
+            )
+
+    # Phase 7Z: ONE immutable current-cycle broker snapshot (account+positions read
+    # once via the team's own credentials). Threaded into PM, candidate context,
+    # routing/execution, and the audit. A failed read => account_state_unavailable.
+    snapshot = _broker_snapshot_for_source(team, settings)
+    account = snapshot.to_account_context(starting_equity_fallback=settings.starting_equity)
+    if not snapshot.is_available:
+        print(
+            f"({team} account unavailable: {snapshot.classification}; "
+            "cycle grounded as account_state_unavailable — positions/cash treated as UNKNOWN.)"
+        )
+    # Phase 7Z: reconcile the fresh snapshot against historical memory so stale
+    # XYZ/low-buying-power/short-exposure context can never masquerade as live state.
+    # Computed before the LLM context so the candidate prompt carries the warnings.
+    reconciliation = _reconcile_team_state(team, snapshot, settings)
+    if reconciliation.has_conflicts:
+        print(f"State reconciliation: {reconciliation.status}")
+        for warning in reconciliation.warnings():
+            print(f"  ! {warning}")
     ks = read_kill_switch()
     if ks.engaged:
         print(ks.describe())
@@ -441,13 +619,17 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
     context_client = _safe_read_client(team, settings)
     price_fn = _market_data_price_fn(settings)
 
-    # SPY benchmark (Task 6): compute return vs the recorded starting SPY price.
+    # SPY benchmark (Task 6 / Phase 7Z): same-period anchors — recorded starting
+    # SPY price and the current SPY price. Either may be None (-> n/a, never a
+    # false beat/loss). spy_return is computed only from these shared anchors.
     state = load_competition_state()
     spy_return_pct = None
     spy_provenance = DataProvenance.UNKNOWN
+    spy_start_price = state.starting_spy_price
+    spy_current_price = None
     if state.starting_spy_price and price_fn is not None:
-        current_spy, _ = latest_price("SPY", price_fn)
-        spy_return_pct = spy_return(state.starting_spy_price, current_spy)
+        spy_current_price, _ = latest_price("SPY", price_fn)
+        spy_return_pct = spy_return(state.starting_spy_price, spy_current_price)
         if spy_return_pct is None:
             print("(SPY current price unavailable; SPY return unknown.)")
         else:
@@ -455,15 +637,36 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
     elif not state.starting_spy_price:
         print("(No starting SPY price recorded; SPY return unknown. Re-run start-week-competition with market data.)")
 
-    # Resolve proposal source. For LLM, fail clearly BEFORE any broker execution.
+    # Build the LLM proposal source (provider already validated above).
     week_proposal_source = None
-    if source_name == "llm":
+    if source_name == "llm" and provider_unavailable_reason is not None:
+        # Provider could not be built (blank/missing key). Use a source that returns
+        # an explicit provider-FAILED bundle so the cycle still grounds on fresh
+        # state and records `provider_failure` (never a silent zero). No LLM call.
+        from src.agents.model_routing import resolve_model, routing_status
+        from src.competition.week_competition import ProposalBundle
+
         try:
-            # Strategy/proposal generation is the high-value path -> strategy model.
-            provider = build_routed_provider("strategy")
-        except LLMProviderError as exc:
-            print(f"LLM proposal source unavailable: {exc}")
-            raise SystemExit(1) from exc
+            _pname = routing_status().get("provider")
+            _mname = resolve_model("strategy")
+        except Exception:  # noqa: BLE001 - naming is best-effort metadata only
+            _pname, _mname = None, None
+        print(f"LLM provider: {_pname} | strategy model: {_mname} | status: UNAVAILABLE (no usable key)")
+
+        def _provider_failed_source(
+            _tid, _reason=provider_unavailable_reason, _p=_pname, _m=_mname
+        ) -> "ProposalBundle":
+            return ProposalBundle(
+                proposals=[],
+                provider_called=True,
+                provider_failed=True,
+                raw_errors=[f"LLM provider unavailable (missing/blank credentials): {_reason}"],
+                provider_name=_p,
+                model_name=_m,
+            )
+
+        week_proposal_source = _provider_failed_source
+    elif source_name == "llm":
         status = routing_status()
         print(f"LLM provider: {status['provider']} | strategy model: {status['strategy_model']}")
         strategy_id = f"{team}_llm_week_competition_v1"
@@ -478,12 +681,14 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
             research_config=research_config,
             alpaca_news_fn=alpaca_news_fn,
             openai_web_fn=openai_web_fn,
+            snapshot=snapshot,
+            reconciliation=reconciliation,
         )
 
     # Execution client (gated): only built for genuine non-dry-run paper submission.
-    # Review-only never submits, so the broker client is never built.
+    # Review-only and a provider-failed cycle never submit, so no broker client.
     client = None
-    if not settings.dry_run and not ks.engaged and not review_only:
+    if not settings.dry_run and not ks.engaged and not review_only and provider_unavailable_reason is None:
         try:
             client = client_for_source(
                 team,
@@ -494,14 +699,11 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
             print(f"(Team broker unavailable: {exc}; running without live submission.)")
             client = None
 
-    # Portfolio Manager context: current positions (read-only; degrades to empty).
-    positions = None
-    try:
-        from src.research.data_tools import alpaca_positions
-
-        positions = alpaca_positions(context_client).value or []
-    except Exception:  # noqa: BLE001 - positions are best-effort context only
-        positions = None
+    # Portfolio Manager context: current positions come from the SAME immutable
+    # snapshot (no duplicate broker call). When the account was unavailable we have
+    # no positions and must not pretend the book is empty.
+    positions = list(snapshot.positions) if snapshot.is_available else None
+    benchmark_timeframe = _benchmark_timeframe_for(state)
 
     result = run_week_cycle(
         team,
@@ -510,6 +712,12 @@ def run_week_cycle_cli(team: str, proposal_source: str | None = None, review_onl
         proposal_source=week_proposal_source,
         client=client,
         dry_run=settings.dry_run,
+        snapshot=snapshot,
+        reconciliation=reconciliation,
+        spy_start_price=spy_start_price,
+        spy_current_price=spy_current_price,
+        benchmark_timeframe=benchmark_timeframe,
+        team_autonomy_enabled=_team_autonomy_enabled(team),
         spy_return_pct=spy_return_pct,
         spy_provenance=spy_provenance,
         portfolio_config=PortfolioManagerConfig.from_env(),
@@ -856,7 +1064,28 @@ def run_llm_routing_status() -> None:
     print(f"Critique model: {status['critique_model']}")
     print(f"Summary model: {status['summary_model']}")
     print(f"Research synthesis model: {status['research_synthesis_model']}")
-    print(f"API key configured: {status['api_key_configured']}")
+    # Phase 7Z: report CONFIGURATION only — never claim a provider/model is
+    # "usable" merely because a key is nonblank. This command performs NO live
+    # provider call, so it cannot assert connectivity or model availability.
+    provider = status["provider"]
+    if provider == "ollama":
+        # Local OpenAI-compatible endpoint; no hosted API key is required.
+        print("Credentials: local Ollama endpoint (no hosted API key required).")
+        print("Endpoint/model configuration: set via OLLAMA_BASE_URL + the model names above.")
+        print("Reachability: NOT verified by this command (no live call performed).")
+    else:
+        configured = bool(status["api_key_configured"])
+        state = "configured" if configured else "NOT configured (missing/blank credentials)"
+        print(f"API key configured: {configured}")
+        print(
+            f"Credentials for '{provider}': {state}; "
+            "API connectivity and model availability not verified by this command."
+        )
+        if not configured:
+            print(
+                "  -> A full LLM cycle will be recorded as no_trade_reason_class=provider_failure "
+                "(explicit diagnostics; never a silent model-zero result)."
+            )
 
 
 def run_llm_review_status() -> None:
@@ -967,14 +1196,28 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
         except (TypeError, ValueError, KeyError):
             account_ok = False
 
-    # Open positions (best-effort, read-only).
-    open_positions = None
+    # Open positions (best-effort, read-only) + a FRESH current-cycle snapshot.
+    from src.competition.broker_snapshot import build_snapshot_from_parts, unavailable_snapshot
+
+    raw_positions: list = []
     read_client = _safe_read_client(team, settings)
-    if read_client is not None:
+    if read_client is not None and read_client.has_credentials():
         try:
-            open_positions = len(alpaca_positions(read_client).value or [])
+            raw_positions = list(read_client.get_positions())
         except Exception:  # noqa: BLE001 - positions are best-effort context only
-            open_positions = None
+            raw_positions = []
+    open_positions = len(raw_positions) if account_ok else None
+
+    if account_ok:
+        snapshot = build_snapshot_from_parts(
+            team, account=diagnosis.account, raw_positions=raw_positions,
+            account_read_ok=True, as_of=ny_trading_date(),
+        )
+    else:
+        snapshot = unavailable_snapshot(
+            team, classification=diagnosis.classification, as_of=ny_trading_date()
+        )
+    reconciliation = _reconcile_team_state(team, snapshot, settings)
 
     low_bp_threshold = pm_config.low_buying_power_review_threshold_pct
     low_bp = False
@@ -988,11 +1231,19 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
 
     decision, _ = _evaluate_team_cheap_gate(team)
 
-    # Latest recorded cycle (scorecard).
+    # Latest recorded cycle (scorecard). Phase 7Z: prefer the persisted exact
+    # no_trade_reason_class so the diagnostic shows the same machine-readable reason.
     scorecard = load_latest_scorecard(team)
+    cgo = (getattr(scorecard, "candidate_generation_outcome", None) or {}) if scorecard else {}
+    spy_start = getattr(scorecard, "spy_start_price", None) if scorecard else None
+    spy_end = getattr(scorecard, "spy_end_price", None) if scorecard else None
+    anchors_available = (spy_start is not None and spy_end is not None) if scorecard else None
     no_trade_reason = None
     if scorecard is not None:
-        if getattr(scorecard, "portfolio_no_trade", False):
+        cgo_detail = cgo.get("detail") if cgo else None
+        if cgo_detail and getattr(scorecard, "no_trade_reason_class", None):
+            no_trade_reason = cgo_detail
+        elif getattr(scorecard, "portfolio_no_trade", False):
             if low_bp or (scorecard.buying_power == 0):
                 no_trade_reason = "Low buying power: deterministic gate blocks new-money buys."
             elif (scorecard.proposals_count or 0) == 0:
@@ -1050,6 +1301,23 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
         portfolio_decision_type=getattr(scorecard, "portfolio_decision_type", None) if scorecard else None,
         portfolio_no_trade=getattr(scorecard, "portfolio_no_trade", None) if scorecard else None,
         no_trade_reason=no_trade_reason,
+        # Phase 7Z: fresh broker snapshot + reconciliation (current read).
+        snapshot_source=snapshot.source,
+        snapshot_time=snapshot.snapshot_time,
+        snapshot_account_read_ok=snapshot.account_read_ok,
+        reconciliation_status=reconciliation.status,
+        reconciliation_conflicts=reconciliation.warnings(),
+        # Phase 7Z: candidate-generation auditability (latest recorded cycle).
+        candidate_generation_allowed=(cgo.get("candidate_generation_allowed") if cgo else None),
+        reached_candidate_generation=(cgo.get("reached_candidate_generation") if cgo else None),
+        no_trade_reason_class=getattr(scorecard, "no_trade_reason_class", None) if scorecard else None,
+        execution_block_reason=getattr(scorecard, "execution_block_reason", None) if scorecard else None,
+        provider_outcome=getattr(scorecard, "provider_outcome", None) if scorecard else None,
+        routed_provider=getattr(scorecard, "routed_provider", None) if scorecard else None,
+        routed_model=getattr(scorecard, "routed_model", None) if scorecard else None,
+        team_autonomy_enabled=_team_autonomy_enabled(team),
+        benchmark_timeframe=getattr(scorecard, "benchmark_timeframe", None) if scorecard else None,
+        benchmark_anchors_available=anchors_available,
         last_audit_iso=last_audit_iso,
         audit_age_seconds=audit_age,
         loop_heartbeat_stale=bool(heartbeat_stale),
@@ -1776,6 +2044,12 @@ def _write_iteration_audit(
         permissions = TradingPermissions.from_env()
         mem = load_prompt_memory_metadata(team_id) or {}
         pr = portfolio_result or {}
+        cgo = (getattr(scorecard, "candidate_generation_outcome", None) or {}) if scorecard else {}
+        spy_start = getattr(scorecard, "spy_start_price", None) if scorecard else None
+        spy_end = getattr(scorecard, "spy_end_price", None) if scorecard else None
+        anchors_available = (
+            (spy_start is not None and spy_end is not None) if scorecard else None
+        )
         record = IterationAuditRecord(
             iteration_id=new_iteration_id(iteration),
             iteration=iteration,
@@ -1796,6 +2070,23 @@ def _write_iteration_audit(
             broker_rejected_count=getattr(scorecard, "broker_rejected_count", None) if scorecard else None,
             portfolio_decision_type=getattr(scorecard, "portfolio_decision_type", None) if scorecard else None,
             portfolio_no_trade=getattr(scorecard, "portfolio_no_trade", None) if scorecard else None,
+            # Phase 7Z: exact candidate-generation outcome + fresh-state grounding.
+            no_trade_reason=cgo.get("detail") if cgo else None,
+            no_trade_reason_class=getattr(scorecard, "no_trade_reason_class", None) if scorecard else None,
+            execution_block_reason=getattr(scorecard, "execution_block_reason", None) if scorecard else None,
+            candidate_generation_allowed=cgo.get("candidate_generation_allowed") if cgo else None,
+            reached_candidate_generation=cgo.get("reached_candidate_generation") if cgo else None,
+            provider_outcome=getattr(scorecard, "provider_outcome", None) if scorecard else None,
+            routed_provider=getattr(scorecard, "routed_provider", None) if scorecard else None,
+            routed_model=getattr(scorecard, "routed_model", None) if scorecard else None,
+            provider_failure_category=cgo.get("provider_failure_category") if cgo else None,
+            account_read_ok=getattr(scorecard, "account_read_ok", None) if scorecard else None,
+            account_snapshot_source=getattr(scorecard, "account_snapshot_source", None) if scorecard else None,
+            account_snapshot_time=getattr(scorecard, "account_snapshot_time", None) if scorecard else None,
+            reconciliation_status=getattr(scorecard, "reconciliation_status", None) if scorecard else None,
+            reconciliation_conflicts=getattr(scorecard, "reconciliation_conflicts", None) if scorecard else None,
+            benchmark_timeframe=getattr(scorecard, "benchmark_timeframe", None) if scorecard else None,
+            benchmark_anchors_available=anchors_available,
             equity=getattr(scorecard, "current_equity", None) if scorecard else None,
             cash=getattr(scorecard, "cash", None) if scorecard else None,
             buying_power=getattr(scorecard, "buying_power", None) if scorecard else None,
@@ -2042,10 +2333,10 @@ def run_cheap_competition_loop(
                             # still run review/learning (no new orders).
                             cycle_action = "managed_review_only"
                             print(f"[{tid}] new buys BLOCKED: {portfolio_result.get('new_buys_blocked_reason')}")
-                            run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                            run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True, fail_fast_on_provider_error=False)
                         else:
                             cycle_action = "full_cycle"
-                            run_week_cycle_cli(team=tid, proposal_source="llm")
+                            run_week_cycle_cli(team=tid, proposal_source="llm", fail_fast_on_provider_error=False)
                 elif allow_review_when_skipped:
                     # Gate skipped a full cycle: do advisory review-only + cheap LLM
                     # critique/summary stages. NEVER runs the expensive strategy model
@@ -2056,7 +2347,7 @@ def run_cheap_competition_loop(
                         if llm_review_when_skipped:
                             print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
                     else:
-                        run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                        run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True, fail_fast_on_provider_error=False)
                         if llm_review_when_skipped:
                             try:
                                 run_llm_daily_review(team=tid)
@@ -2228,7 +2519,7 @@ def _run_quiet_off_hours_iteration(
                 if llm_review_when_skipped:
                     print(f"[dry-run] [{tid}] would run: run-llm-daily-review (advisory; no orders)")
             else:
-                run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True)
+                run_week_cycle_cli(team=tid, proposal_source="llm", review_only=True, fail_fast_on_provider_error=False)
                 if llm_review_when_skipped:
                     try:
                         run_llm_daily_review(team=tid)

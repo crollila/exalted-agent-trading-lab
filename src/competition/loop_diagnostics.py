@@ -100,6 +100,25 @@ class TeamLoopFacts:
     portfolio_decision_type: str | None = None
     portfolio_no_trade: bool | None = None
     no_trade_reason: str | None = None
+    # Phase 7Z: fresh broker-state grounding (CURRENT read for this diagnostic).
+    snapshot_source: str | None = None
+    snapshot_time: str | None = None
+    snapshot_account_read_ok: bool | None = None
+    reconciliation_status: str | None = None
+    reconciliation_conflicts: list[str] = field(default_factory=list)
+    # Phase 7Z: candidate-generation auditability (from the latest recorded cycle).
+    candidate_generation_allowed: bool | None = None
+    reached_candidate_generation: bool | None = None
+    no_trade_reason_class: str | None = None
+    execution_block_reason: str | None = None
+    provider_outcome: str | None = None
+    routed_provider: str | None = None
+    routed_model: str | None = None
+    # Phase 7Z: real per-team autonomy config (diagnostic only; not an exec gate).
+    team_autonomy_enabled: bool | None = None
+    # Phase 7Z: same-period benchmark anchors.
+    benchmark_timeframe: str | None = None
+    benchmark_anchors_available: bool | None = None
     # Loop liveness (audit heartbeat).
     last_audit_iso: str | None = None
     audit_age_seconds: float | None = None
@@ -313,6 +332,17 @@ def format_team_report(facts: TeamLoopFacts, diagnosis: TeamDiagnosis) -> str:
     lines.append(f"  open_positions={_fmt(facts.open_positions)} "
                  f"low_buying_power={facts.low_buying_power} (threshold {facts.low_bp_threshold_pct:.0%})")
 
+    lines.append("Fresh broker snapshot (current read):")
+    lines.append(f"  source={_fmt(facts.snapshot_source)} time={_fmt(facts.snapshot_time)} "
+                 f"account_read_ok={_fmt(facts.snapshot_account_read_ok)}")
+    lines.append("State reconciliation (current state vs historical memory):")
+    lines.append(f"  status={_fmt(facts.reconciliation_status)}")
+    if facts.reconciliation_conflicts:
+        for conflict in facts.reconciliation_conflicts:
+            lines.append(f"  conflict: {conflict}")
+    else:
+        lines.append("  conflicts: (none)")
+
     lines.append("Daily usage vs caps (ET trading date):")
     lines.append(f"  orders_today={_fmt(facts.orders_today)} / max_daily_orders_per_team={facts.max_daily_orders_per_team}")
     _dn = "n/a" if facts.daily_notional_today is None else f"${facts.daily_notional_today:,.2f}"
@@ -339,6 +369,20 @@ def format_team_report(facts: TeamLoopFacts, diagnosis: TeamDiagnosis) -> str:
     lines.append(f"  portfolio_decision={_fmt(facts.portfolio_decision_type)} "
                  f"no_trade={_fmt(facts.portfolio_no_trade)}")
     lines.append(f"  no_trade_reason={_fmt(facts.no_trade_reason)}")
+    lines.append("Candidate generation (latest recorded cycle):")
+    lines.append(f"  candidate_generation_allowed={_fmt(facts.candidate_generation_allowed)} "
+                 f"reached_candidate_generation={_fmt(facts.reached_candidate_generation)}")
+    lines.append(f"  no_trade_reason_class={_fmt(facts.no_trade_reason_class)} "
+                 "(only for a GENUINE no-trade; null when proposals were execution-eligible)")
+    lines.append(f"  execution_block_reason={_fmt(facts.execution_block_reason)} "
+                 "(approved candidate(s) not submitted: dry-run/kill-switch/review-only/autonomy/no-client)")
+    lines.append(f"  provider_outcome={_fmt(facts.provider_outcome)} "
+                 f"routed_provider={_fmt(facts.routed_provider)} routed_model={_fmt(facts.routed_model)}")
+    lines.append(f"  team_autonomy_enabled={_fmt(facts.team_autonomy_enabled)} "
+                 "(real TEAM_*_AUTONOMY_ENABLED; diagnostic only, not an execution gate)")
+    lines.append("Benchmark integrity (same-period anchors):")
+    lines.append(f"  timeframe={_fmt(facts.benchmark_timeframe)} "
+                 f"anchors_available={_fmt(facts.benchmark_anchors_available)}")
     lines.append("  (risk/review token contents are not persisted; routing counts above reflect the "
                  "deterministic Python risk result.)")
     lines.append(f"  last_cycle_diagnosis={diagnosis.last_cycle_diagnosis}")

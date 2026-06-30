@@ -1598,3 +1598,66 @@ orders for the current ET trading date; BOTH entries and sell-to-close count;
 rejected/cancelled/simulation-only/prior-day excluded; broker is authoritative with
 local attribution as fallback; LLM output is never the usage authority. No live/
 options/short/margin execution and no settings/code changes were added.
+
+## Phase 7Z - Candidate-generation integrity, fresh-state grounding, truthful SPY
+
+Status: complete.
+
+Goal: make it possible to determine exactly why candidate generation produced zero
+proposals, prevent stale historical memory from masquerading as live portfolio state,
+and prevent false SPY-relative claims. No forced trades; no weakened gates.
+
+Delivered:
+
+- `src/competition/broker_snapshot.py` - immutable `BrokerSnapshot` fetched once per
+  team per market-open full cycle (source, timestamp, equity/cash/buying power,
+  position/short counts, held symbols, `account_read_ok`, `status`); threaded into the
+  Portfolio Manager, candidate-generation context, routing/execution, and the cycle
+  audit. A failed read => `account_state_unavailable` (positions/cash treated as
+  UNKNOWN, never zero/available). `run-week-cycle` builds it once and reuses it.
+- `src/competition/state_reconciliation.py` - deterministic conflict detection
+  (stale holding vs zero positions, stale low-buying-power claim vs healthy BP, stale
+  short exposure vs no short) with statuses `clean` / `stale_context_corrected` /
+  `account_state_unavailable` / `live_portfolio_health_block`. History preserved for
+  audit, tagged stale for the cycle.
+- `src/competition/candidate_generation.py` - records pipeline stages and persists a
+  machine-readable `candidate_generation_outcome` + exactly one `no_trade_reason_class`
+  (never null after a completed cycle): `no_current_signal`, `portfolio_manager_hold`,
+  `candidate_generation_disabled`, `provider_failure`, `invalid_model_output`,
+  `model_zero_candidates`, `risk_rejected`, `daily_cap_reached`, `autonomy_disabled`,
+  `account_state_unavailable`, `live_portfolio_health_block`. Routed provider/model
+  NAMES + failure category recorded (no secrets / no raw prompt). A healthy
+  zero-position/full-cash account always reaches candidate generation; history alone
+  never forces `max_new=0`.
+- `src/competition/benchmark.py` - same-period anchors + `safe_excess`; excess only
+  from shared anchors, `n/a` when missing (no false beat/loss). Fixed the Discord
+  scoreboard/brief anchor-mixing bug (`+1.13%` when team `0.0000` / SPY `-0.0012`;
+  valid excess `+0.0012`).
+- Wiring: new fields on `TeamScorecard` (no_trade_reason_class, candidate_generation_
+  outcome, reconciliation_status/conflicts, account_read_ok/source/time, routed_provider/
+  model, provider_outcome, spy_start/end price, benchmark timeframe/period) and
+  `IterationAuditRecord`; `run_week_cycle` accepts the snapshot/reconciliation/benchmark
+  anchors and classifies the outcome; `ProposalBundle` carries provider_called/failed +
+  provider/model names; `generate_llm_proposals` sets them.
+- Portfolio Manager: no-trade decisions name their current-data evidence source;
+  LLM hold/no-trade with no current support is downgraded to advisory; failure-streak
+  tightening keeps >=1 slot on a healthy candidate-bearing cycle.
+- Bounded prompt memory: CURRENT VERIFIED PORTFOLIO STATE vs HISTORICAL RESEARCH
+  FEEDBACK split + compact conflict warnings; account-unavailable marks positions/cash
+  UNKNOWN; bounded limits preserved, no raw prompts saved.
+- Diagnostics: `diagnose-competition-loop` prints fresh snapshot source/time/read-ok,
+  reconciliation status + conflicts, candidate-generation allowance + outcome, exact
+  no-trade reason class, provider/model outcome category, and benchmark timeframe +
+  anchor availability. Discord brief surfaces the no-trade class + grounding + a
+  same-period SPY-relative claim; EOD keeps `n/a` without anchors. Off-hours quiet mode
+  unchanged.
+- Tests: `tests/test_phase7z.py` - fresh-state override of stale XYZ/low-BP memory;
+  genuine low BP still blocks; broker-read-failure fail-safe; healthy reaches candidate
+  generation without forcing a trade; each no-trade class persisted/distinguishable
+  (model_zero / provider_failure / invalid_output / risk_rejected); same-period
+  benchmark math; missing anchors => n/a; PM evidence naming; history-alone guards;
+  new modules never submit; kill switch => autonomy_disabled.
+
+Not included: live trading, forced daily trades, weakened deterministic risk, LLM order
+authority, Alpaca account mutation, secret printing, or any removal of paper-only /
+kill-switch / cap checks.

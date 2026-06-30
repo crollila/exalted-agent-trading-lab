@@ -928,3 +928,34 @@ running total updates after each submit so a later excess order in the same batc
 is blocked. `diagnose-competition-loop --team both` now prints
 `daily_notional_today / max_daily_notional_per_team`, `source`, and
 `reconciliation_status` (no secrets). See `docs/risk_policy.md`.
+
+### Candidate-generation integrity & fresh-state grounding (Phase 7Z)
+
+Answers "why did a `full_cycle` produce `proposals_count=0` with no reason and no
+exception?" and stops stale runtime memory (old XYZ/SPY holdings, prior short
+exposure, an old low-buying-power lesson) from masquerading as live portfolio state.
+
+- **One immutable broker snapshot per cycle** (account + positions read once) is
+  threaded into the Portfolio Manager, candidate-generation context, routing/
+  execution, and the audit. A failed read becomes `account_state_unavailable` — the
+  system never pretends positions are zero or cash is available.
+- **Current-vs-historical reconciliation** marks conflicts (stale holding vs zero
+  positions, stale low-buying-power claim vs healthy BP, stale short exposure vs no
+  short) and tags old history stale for the cycle while preserving it for audit.
+- **Exactly one `no_trade_reason_class`** is persisted for every completed no-trade
+  cycle (never null): `no_current_signal`, `portfolio_manager_hold`,
+  `candidate_generation_disabled`, `provider_failure`, `invalid_model_output`,
+  `model_zero_candidates`, `risk_rejected`, `daily_cap_reached`, `autonomy_disabled`,
+  `account_state_unavailable`, `live_portfolio_health_block`. The routed provider/
+  model NAME and a failure category are recorded (never secrets or raw prompt). No
+  trade is ever forced; a healthy zero-position/full-cash account always reaches
+  candidate generation.
+- **Truthful SPY attribution.** Team return, SPY return, and excess come only from the
+  same period anchors; missing anchors render `n/a` (never a false "beat"/"lost to"
+  SPY). This corrected scoreboard/brief math that mixed a live team return with a
+  stale SPY return.
+
+`diagnose-competition-loop --team both` now also prints the fresh snapshot source/
+time/read-ok, reconciliation status + conflicts, candidate-generation allowance +
+outcome, the exact no-trade reason class, the provider/model outcome category, and the
+benchmark timeframe + anchor availability. See `docs/risk_policy.md`.

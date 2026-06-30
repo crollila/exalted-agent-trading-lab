@@ -61,9 +61,18 @@ def build_llm_context(
     research_run: ResearchRunResult | None = None,
     watchlist: tuple[str, ...] = (),
     review_flags: LLMReviewFlags | None = None,
+    snapshot: Any | None = None,
+    reconciliation: Any | None = None,
     env: Any | None = None,
 ) -> dict[str, Any]:
-    """Assemble allowlisted, provenance-tagged context for the LLM. No secrets."""
+    """Assemble allowlisted, provenance-tagged context for the LLM. No secrets.
+
+    Phase 7Z: when a current-cycle ``snapshot`` / ``reconciliation`` is supplied,
+    the bounded memory is grounded on it — the CURRENT VERIFIED PORTFOLIO STATE is
+    labelled, historical memory is tagged non-binding, and stale-vs-live conflict
+    warnings are attached so old XYZ/low-buying-power context cannot masquerade as
+    live state.
+    """
 
     scorecard = load_latest_scorecard(team_id, scorecard_dir)
     ledger = TeamLearningLedger.load(team_id, learning_dir)
@@ -122,14 +131,22 @@ def build_llm_context(
         attribution_entries = load_team_attribution(team_id, attribution_dir=attribution_dir)
     except Exception:  # noqa: BLE001
         attribution_entries = []
+    # Phase 7Z: when the current-cycle snapshot reports the account unavailable,
+    # the bounded working memory must not invent a flat/funded book.
+    snap_available = snapshot is None or getattr(snapshot, "is_available", True)
+    account_read_ok = True if snapshot is None else bool(getattr(snapshot, "account_read_ok", True))
+    bounded_account = (account_block.get("value") if isinstance(account_block, dict) else None) if snap_available else None
+    bounded_positions = raw_positions if snap_available else []
     bounded_memory, memory_metadata = build_bounded_prompt_memory(
         team_id,
-        account=(account_block.get("value") if isinstance(account_block, dict) else None),
-        raw_positions=raw_positions,
+        account=bounded_account,
+        raw_positions=bounded_positions,
         attribution_entries=attribution_entries,
         market_session=(market_block.get("value") if isinstance(market_block, dict) else None),
         scorecard_snapshot=(scorecard.as_dict() if scorecard else None),
         config=MemoryConfig.from_env(env if isinstance(env, dict) else None),
+        reconciliation=reconciliation,
+        account_read_ok=account_read_ok,
     )
 
     return {
@@ -137,6 +154,10 @@ def build_llm_context(
         "account": account_block,
         "positions": positions_block,
         "market_clock": market_block,
+        "broker_snapshot": (snapshot.as_dict() if snapshot is not None and hasattr(snapshot, "as_dict") else None),
+        "state_reconciliation": (
+            reconciliation.as_dict() if reconciliation is not None and hasattr(reconciliation, "as_dict") else None
+        ),
         "watchlist_prices": latest_prices(watch, price_fn),
         "prior_scorecard": scorecard.as_dict() if scorecard else None,
         # Bounded durable memory (Phase 7X) — the authoritative memory channel.
@@ -177,8 +198,14 @@ def build_llm_proposal_source(
     reviews_dir: Path | str = DEFAULT_REVIEWS_DIR,
     team_memory_dir: Path | str = DEFAULT_TEAM_MEMORY_DIR,
     research_dir: Path | str = DEFAULT_RESEARCH_DIR,
+    snapshot: Any | None = None,
+    reconciliation: Any | None = None,
 ) -> Callable[[str], ProposalBundle]:
-    """Return a ``run_week_cycle``-compatible proposal source backed by the LLM."""
+    """Return a ``run_week_cycle``-compatible proposal source backed by the LLM.
+
+    Phase 7Z: an optional current-cycle ``snapshot``/``reconciliation`` grounds the
+    candidate-generation context on fresh broker state and stale-vs-live warnings.
+    """
 
     research_config = research_config or ResearchConfig.from_env()
 
@@ -203,6 +230,8 @@ def build_llm_proposal_source(
             team_memory_dir=team_memory_dir,
             research_run=research_run,
             watchlist=research_config.watchlist,
+            snapshot=snapshot,
+            reconciliation=reconciliation,
         )
         # Phase 7X: record bounded prompt-memory metadata (no raw prompt text/secrets)
         # so the iteration audit can show what memory the live prompt used.
@@ -217,6 +246,17 @@ def build_llm_proposal_source(
         bundle = generate_llm_proposals(
             tid, provider=provider, context=context, strategy_id=strategy_id
         )
+        # Phase 7Z: record the routed provider/model NAMES (never secrets) so the
+        # candidate-generation outcome can report the call category truthfully.
+        try:
+            from src.agents.model_routing import resolve_model, routing_status
+
+            if not bundle.provider_name:
+                bundle.provider_name = routing_status().get("provider")
+            if not bundle.model_name:
+                bundle.model_name = resolve_model("strategy")
+        except Exception:  # noqa: BLE001 - naming is best-effort metadata only
+            pass
         cycle_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         log_research(
             research_run,

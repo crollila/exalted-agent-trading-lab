@@ -46,6 +46,8 @@ def build_bounded_prompt_memory(
     config: MemoryConfig | None = None,
     playbook: TeamPlaybook | None = None,
     recent_daily: list[dict[str, Any]] | None = None,
+    reconciliation: Any | None = None,
+    account_read_ok: bool = True,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return (bounded_memory_block, metadata). Pure + deterministic.
@@ -123,6 +125,45 @@ def build_bounded_prompt_memory(
         relevance_symbols=relevance_symbols, now=now,
     )
 
+    # Phase 7Z: clearly separate CURRENT VERIFIED PORTFOLIO STATE (authoritative
+    # live broker facts) from HISTORICAL RESEARCH FEEDBACK (non-binding context),
+    # and surface compact conflict warnings when memory contradicts the snapshot.
+    # Existing keys are preserved for backward compatibility; the labels and notes
+    # are additive. No raw prompt text or secrets are stored.
+    block["section_labels"] = {
+        "current_verified_portfolio_state": [
+            "working_memory" if account_read_ok else "working_memory (UNAVAILABLE)"
+        ],
+        "historical_research_feedback": [
+            "recent_daily_summaries",
+            "playbook_lessons",
+            "scorecard_snapshot",
+        ],
+    }
+    block["current_verified_portfolio_state_note"] = (
+        "CURRENT VERIFIED PORTFOLIO STATE — authoritative live broker facts for this cycle "
+        "(positions, cash, buying power). These override any historical claim."
+        if account_read_ok
+        else "CURRENT VERIFIED PORTFOLIO STATE — account_state_unavailable: live positions/cash are "
+        "UNKNOWN this cycle. Do NOT assume the book is flat or cash is available."
+    )
+    block["historical_research_feedback_note"] = (
+        "HISTORICAL RESEARCH FEEDBACK — non-binding context only. Daily summaries, lessons, and "
+        "prior scorecards are NOT current holdings or account facts; they never override the "
+        "current verified portfolio state above."
+    )
+
+    conflict_warnings: list[str] = []
+    reconciliation_status = None
+    if reconciliation is not None:
+        try:
+            conflict_warnings = list(reconciliation.warnings())
+            reconciliation_status = reconciliation.status
+        except Exception:  # noqa: BLE001 - reconciliation is best-effort context
+            conflict_warnings = []
+    block["reconciliation_status"] = reconciliation_status
+    block["reconciliation_warnings"] = conflict_warnings
+
     metadata = {
         "daily_summaries_included": [d.get("trading_date") for d in block["recent_daily_summaries"]],
         "lesson_ids_included": [
@@ -131,6 +172,9 @@ def build_bounded_prompt_memory(
         "scorecard_included": scorecard_snapshot is not None,
         "bounded_context_chars": len(json.dumps(block, default=str)),
         "malformed_or_unavailable": malformed,
+        "reconciliation_status": reconciliation_status,
+        "reconciliation_conflicts": conflict_warnings,
+        "account_read_ok": account_read_ok,
     }
     return block, metadata
 

@@ -61,7 +61,7 @@ def loop_recorder(monkeypatch):
                                 reason="full"), None)
     monkeypatch.setattr(main, "_evaluate_team_cheap_gate", _gate)
 
-    def _week_cycle(team, proposal_source=None, review_only=False):
+    def _week_cycle(team, proposal_source=None, review_only=False, **kwargs):
         calls.append(f"week_cycle:{team}:review_only={review_only}")
     monkeypatch.setattr(main, "run_week_cycle_cli", _week_cycle)
 

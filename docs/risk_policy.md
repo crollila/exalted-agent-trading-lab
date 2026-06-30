@@ -82,6 +82,39 @@ competition loop before every paper order.
   Python); it never submits orders and never starts while the kill switch is
   engaged. See `docs/continuous_operation.md`.
 
+## Fresh-state grounding, candidate-generation auditability & benchmark integrity (Phase 7Z)
+
+These are **observability and grounding** controls. They add no execution surface and weaken
+no gate; the deterministic risk engine, daily caps, and kill switch remain authoritative.
+
+- **One immutable broker snapshot per cycle.** Before every market-open full cycle, each team's
+  account and positions are read once and the same snapshot is used by the Portfolio Manager,
+  candidate-generation context, routing/execution, and the audit. If the broker read fails the
+  cycle is grounded as `account_state_unavailable` — the system **never** treats positions as zero
+  or cash as available when the account is unknown.
+- **Historical memory is research feedback only.** Daily summaries, lessons, prior theses, old
+  scorecards, and playbook memory **never** override current broker facts about positions, cash,
+  buying power, exposure, or holdings. Deterministic reconciliation marks conflicts (stale holding
+  vs zero positions, stale low-buying-power claim vs healthy buying power, stale short exposure vs no
+  current short) and tags old history stale for the cycle (preserved for audit). Statuses: `clean`,
+  `stale_context_corrected`, `account_state_unavailable`, `live_portfolio_health_block`.
+- **No forced trades.** A completed cycle that submits no order records exactly one machine-readable
+  `no_trade_reason_class` (never null): `no_current_signal`, `portfolio_manager_hold`,
+  `candidate_generation_disabled`, `provider_failure`, `invalid_model_output`, `model_zero_candidates`,
+  `risk_rejected`, `daily_cap_reached`, `autonomy_disabled`, `account_state_unavailable`,
+  `live_portfolio_health_block`. A healthy zero-position/full-cash account is always allowed to reach
+  candidate generation; historical losses or a stale playbook item alone can never indefinitely force
+  `max_new=0`. The routed model/provider NAME and a failure category are recorded — never secrets or
+  raw prompt text.
+- **Portfolio Manager no-trade must cite current evidence.** Every no-trade decision names its
+  current-data source (account state, positions, cap usage, market/research evidence, or risk
+  condition). An LLM hold/no-trade with no current condition supporting it is downgraded to advisory,
+  not used as a hard candidate-generation block.
+- **Truthful SPY attribution.** Team return, SPY return, and excess are computed only from the same
+  period anchors (team start/end equity, SPY start/end price, period start/end, timeframe). If anchors
+  are unavailable the value is `n/a`; the system never states "beat SPY" or "lost to SPY" without
+  same-period data, and never mixes a live team return with a stale SPY return.
+
 ## Advanced paper permission levels
 
 All advanced permissions default to `false` (fail-closed) and are paper-only. They are

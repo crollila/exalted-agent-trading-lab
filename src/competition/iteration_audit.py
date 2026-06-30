@@ -70,6 +70,26 @@ class IterationAuditRecord:
     portfolio_decision_type: str | None = None
     portfolio_no_trade: bool | None = None
     no_trade_reason: str | None = None
+    # Phase 7Z: candidate-generation auditability (exact, machine-readable).
+    no_trade_reason_class: str | None = None
+    # Set only when execution-eligible proposals existed but no order submitted
+    # (dry-run / kill switch / review-only / team autonomy off / no broker client).
+    execution_block_reason: str | None = None
+    candidate_generation_allowed: bool | None = None
+    reached_candidate_generation: bool | None = None
+    provider_outcome: str | None = None
+    routed_provider: str | None = None
+    routed_model: str | None = None
+    provider_failure_category: str | None = None
+    # Phase 7Z: fresh broker-state grounding + reconciliation.
+    account_read_ok: bool | None = None
+    account_snapshot_source: str | None = None
+    account_snapshot_time: str | None = None
+    reconciliation_status: str | None = None
+    reconciliation_conflicts: list[str] | None = None
+    # Phase 7Z: same-period benchmark anchor availability.
+    benchmark_timeframe: str | None = None
+    benchmark_anchors_available: bool | None = None
     # Account summary + usage/caps.
     equity: float | None = None
     cash: float | None = None

@@ -135,6 +135,11 @@ class PortfolioDecision:
     low_buying_power: bool = False
     mode: str = ""  # exploration | conservation
     review_questions: dict[str, str] = field(default_factory=dict)
+    # Phase 7Z: a no-trade decision must name its CURRENT-data evidence source
+    # (never "only historical memory"). One of: current_account_state,
+    # current_positions, current_cap_usage, current_market_research_evidence,
+    # current_spy_relative_performance, current_risk_condition.
+    no_trade_evidence_source: str = ""
 
     def is_no_trade(self) -> bool:
         """True when this cycle places no new broker orders (hold/no-trade/blocked)."""
@@ -310,6 +315,7 @@ def review_portfolio(
                 max_new_proposals_this_cycle=cap,
                 rejected_new_ideas_reason=rejected_reason,
                 mode="conservation",
+                no_trade_evidence_source=("" if (allow_new and cap > 0) else "current_account_state"),
             )
         dtype = PortfolioDecisionType.REDUCE_GROSS_EXPOSURE if positions_count else PortfolioDecisionType.NO_TRADE
         return decision(
@@ -323,15 +329,19 @@ def review_portfolio(
             max_new_proposals_this_cycle=0,
             rejected_new_ideas_reason="Insufficient buying power; free room (trim/close/rotate) or request margin first.",
             mode="conservation",
+            no_trade_evidence_source="current_account_state",
         )
 
     # --- No candidates: holding is a valid successful outcome. ---
+    # This no-trade is grounded on a CURRENT fact (zero candidates this cycle),
+    # not on historical memory.
     if candidate_count == 0 and config.allow_no_trade_decisions:
         return decision(
             decision_type=PortfolioDecisionType.NO_TRADE.value,
             rationale="No proposal candidates cleared review this cycle; holding and observing.",
             allowed_to_generate_new_orders=False,
             max_new_proposals_this_cycle=0,
+            no_trade_evidence_source="current_market_research_evidence",
         )
 
     # --- Normal conditions: personality-driven, performance-aware. ---
@@ -347,12 +357,25 @@ def review_portfolio(
             dtype = PortfolioDecisionType.ADD
 
     # Recent failure streak tightens the cap further (faster learning for alpha).
+    # Phase 7Z: historical losses ALONE must never force max_new=0 on a healthy,
+    # candidate-bearing cycle — keep at least one slot when the cap was positive
+    # (the deterministic hard caps still bound it from above).
     if failed > worked and (failed + worked) >= 3:
-        cap = max(0, cap - 1)
+        cap = max(1, cap - 1) if cap > 0 else 0
 
-    # LLM intent may narrow (never widen) the deterministic decision.
+    # LLM intent may narrow (never widen) the deterministic decision. But a model
+    # HOLD / no-trade is only a HARD candidate-generation block when a CURRENT
+    # condition supports it (defensive vs SPY, low BP, or no candidates). When no
+    # current evidence supports it, the model's no-trade is DOWNGRADED to advisory
+    # so stale-memory reasoning alone can never zero a healthy cycle (Phase 7Z).
+    llm_forces_no_new = llm_type is not None and llm_type not in NEW_ORDER_DECISIONS
+    current_supports_hold = bool(defensive or low_bp or candidate_count == 0)
+    downgraded_llm_hold = False
     if llm_type is not None:
-        dtype = llm_type
+        if llm_forces_no_new and not current_supports_hold:
+            downgraded_llm_hold = True  # advisory only; keep deterministic dtype
+        else:
+            dtype = llm_type
     if llm_cap is not None:
         cap = min(cap, max(0, llm_cap))
     cap = min(cap, candidate_count)
@@ -363,18 +386,34 @@ def review_portfolio(
         allow_new = False
         cap = 0
 
+    # Evidence source naming for any no-trade outcome (current data only).
+    if allow_new:
+        evidence = ""
+    elif defensive:
+        evidence = "current_spy_relative_performance"
+    elif positions_count:
+        evidence = "current_positions"
+    else:
+        evidence = "current_cap_usage"
+
     rationale = llm_rationale or (
         f"{'Rotating into' if dtype == PortfolioDecisionType.ROTATE else 'Adding'} "
         f"the strongest idea(s); capped at {cap}."
         if allow_new
         else f"{dtype.value}: holding existing book; no new exposure justified this cycle."
     )
+    risk_note = "Approved sizing is computed by the deterministic risk engine, not the model."
+    if downgraded_llm_hold:
+        risk_note += (
+            " LLM hold/no-trade downgraded to advisory: no current condition supports a hard block."
+        )
     return decision(
         decision_type=dtype.value,
         rationale=rationale,
-        risk_notes="Approved sizing is computed by the deterministic risk engine, not the model.",
+        risk_notes=risk_note,
         allowed_to_generate_new_orders=allow_new,
         max_new_proposals_this_cycle=cap,
         rejected_new_ideas_reason=(None if allow_new else "No idea beat the weakest current holding."),
         mode=("conservation" if (not is_alpha and defensive) else default_mode),
+        no_trade_evidence_source=evidence,
     )

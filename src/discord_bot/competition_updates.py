@@ -486,6 +486,14 @@ def gather_team_iteration_context(
         ctx["simulation_only_count"] = getattr(scorecard, "simulation_only_count", None)
         ctx["orders_submitted"] = getattr(scorecard, "orders_submitted", None)
         ctx["broker_rejected_count"] = getattr(scorecard, "broker_rejected_count", None)
+        # Phase 7Z: exact no-trade reason class + fresh-state grounding so the brief
+        # never claims active holdings, low buying power, or SPY-relative performance
+        # without current supporting data.
+        ctx["no_trade_reason_class"] = getattr(scorecard, "no_trade_reason_class", None)
+        ctx["execution_block_reason"] = getattr(scorecard, "execution_block_reason", None)
+        ctx["reconciliation_status"] = getattr(scorecard, "reconciliation_status", None)
+        ctx["account_read_ok"] = getattr(scorecard, "account_read_ok", None)
+        ctx["reconciliation_conflicts"] = list(getattr(scorecard, "reconciliation_conflicts", []) or [])
         if ctx.get("mode") is None:
             # PM mode is not on the scorecard; fall back to the ledger below.
             pass
@@ -550,6 +558,37 @@ def gather_team_iteration_context(
 
 def _team_display(team_id: str) -> str:
     return _TEAM_DISPLAY.get(team_id, team_id)
+
+
+def _spy_relative_line(ctx: Mapping[str, Any]) -> str:
+    """Same-period SPY-relative claim for the brief (Phase 7Z benchmark integrity).
+
+    Excess is recomputed from the team return and SPY return that share the
+    cycle's scorecard anchors, so a stale daily-review claim can never contradict
+    the current numbers. Renders ``n/a`` (never "beat"/"trailed") when either
+    anchor is missing.
+    """
+
+    from src.competition.benchmark import safe_excess
+
+    def _num(value: Any) -> float | None:
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    team_return = _num(ctx.get("team_return"))
+    spy_return = _num(ctx.get("spy_return"))
+    excess = safe_excess(team_return, spy_return)
+    if excess is None:
+        claim = _NA
+    elif excess > 0:
+        claim = f"beat SPY by {excess:+.4f}"
+    elif excess < 0:
+        claim = f"trailed SPY by {excess:+.4f}"
+    else:
+        claim = "matched SPY (0.0000)"
+    return f"- vs SPY: {claim} (team {_pct(ctx.get('team_return'))} vs SPY {_pct(ctx.get('spy_return'))})"
 
 
 def _what_changed_line(ctx: Mapping[str, Any], *, brief: bool) -> str:
@@ -628,11 +667,14 @@ def build_team_iteration_update(
         f"Why: {why}",
         f"Portfolio Manager: {ctx.get('pm_decision') or _NA} "
         f"(no_trade={ctx.get('pm_no_trade')}, max_new={ctx.get('pm_max_new')})",
+        f"No-trade reason class: {ctx.get('no_trade_reason_class') or _NA}",
+        f"Submission/execution block: {ctx.get('execution_block_reason') or _NA}",
+        f"Grounding: account_read_ok={ctx.get('account_read_ok')} "
+        f"reconciliation={ctx.get('reconciliation_status') or _NA}",
         f"Market: {market} | Kill switch: {ks}",
         "",
         "Current thinking:",
-        f"- vs SPY: {ctx.get('spy_relative_result') or _pct(ctx.get('excess_return'))} "
-        f"(team {_pct(ctx.get('team_return'))} vs SPY {_pct(ctx.get('spy_return'))})",
+        _spy_relative_line(ctx),
         f"- Why vs SPY: {why_vs_spy}",
         f"- Strongest thesis: {strongest_line}",
         f"- Weakest holding: {ctx.get('weakest_symbol') or _NA}",
@@ -682,7 +724,6 @@ def _scoreboard_inputs(
     def _snap(team_id: str) -> Any | None:
         return equity_view.get(team_id) if equity_view is not None else None
 
-    both_live = equity_view is not None and getattr(equity_view, "all_live", False)
     spy_return = None
     per_team: dict[str, dict[str, Any]] = {}
     for team_id in teams:
@@ -698,21 +739,23 @@ def _scoreboard_inputs(
             equity = getattr(card, "current_equity", None) if card is not None else None
 
         if snap is not None and snap.is_live and snap.team_return is not None:
+            # Phase 7Z benchmark integrity: a LIVE team return must NOT be paired
+            # with a STALE cached SPY return — that is the anchor-mixing that
+            # produced false excess (e.g. +0.0113 when the valid value is
+            # +0.0012). Without a same-period live SPY anchor here, excess is n/a.
             team_return = snap.team_return
-            excess = snap.excess_return_vs_spy(team_spy)
-            if excess is None:
-                excess = team_return
+            excess = None
         else:
+            # Cached scorecard values are same-period: that card's excess was
+            # computed from its own team_return - spy_benchmark_return, so it is
+            # a valid same-anchor excess.
             team_return = getattr(card, "team_return", None) if card is not None else None
             excess = getattr(card, "excess_return_vs_spy", None) if card is not None else None
 
-        # Leader ranking: only trust live excess when BOTH teams read live.
-        if both_live and snap is not None and snap.team_return is not None:
-            rank_excess = snap.excess_return_vs_spy(team_spy)
-            if rank_excess is None:
-                rank_excess = snap.team_return
-        else:
-            rank_excess = getattr(card, "excess_return_vs_spy", None) if card is not None else None
+        # Leader ranking uses same-period excess when available, otherwise the
+        # current team return (still honest — ranks by current performance and
+        # never mixes a live return with a stale SPY anchor).
+        rank_excess = excess if excess is not None else team_return
 
         if snap is not None:
             team_source = "live" if snap.is_live else "cached"
@@ -810,7 +853,7 @@ def build_competition_iteration_summary(
         lines.append("Leader: n/a (no scorecards yet)")
     else:
         lines.append(
-            f"Leader: {_team_display(leader)} (excessVsSPY {_pct(per_team[leader]['rank_excess'])})"
+            f"Leader: {_team_display(leader)} (excessVsSPY {_pct(per_team[leader]['excess'])})"
         )
     for team_id in teams:
         data = per_team.get(team_id, {})

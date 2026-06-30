@@ -343,13 +343,24 @@ def generate_llm_proposals(
     system_prompt = build_system_prompt(team_id)
     user_prompt = build_user_prompt(team_id, context)
 
+    provider_name = getattr(provider, "name", None) or type(provider).__name__
+    model_name = getattr(provider, "model", None) or getattr(provider, "model_name", None)
+
     try:
         raw_text = provider.complete_json(system_prompt, user_prompt)
         data = parse_structured_output(raw_text, "proposal")
     except LLMProviderError as exc:
-        return ProposalBundle(proposals=[], raw_errors=[f"LLM output rejected: {exc}"])
+        return ProposalBundle(
+            proposals=[], raw_errors=[f"LLM output rejected: {exc}"],
+            provider_called=True, provider_failed=True,
+            provider_name=provider_name, model_name=model_name,
+        )
     except Exception as exc:  # noqa: BLE001 - provider/runtime failure must not crash the cycle
-        return ProposalBundle(proposals=[], raw_errors=[f"LLM call failed: {exc}"])
+        return ProposalBundle(
+            proposals=[], raw_errors=[f"LLM call failed: {exc}"],
+            provider_called=True, provider_failed=True,
+            provider_name=provider_name, model_name=model_name,
+        )
 
     proposals: list[CompetitionProposal] = []
     errors: list[str] = []
@@ -387,4 +398,8 @@ def generate_llm_proposals(
         proposal_source_ids=proposal_source_ids,
         research_source_ids=sorted(all_source_ids),
         portfolio_decision=portfolio_decision,
+        provider_called=True,
+        provider_failed=False,
+        provider_name=provider_name,
+        model_name=model_name,
     )

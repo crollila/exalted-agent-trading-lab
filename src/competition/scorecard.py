@@ -42,6 +42,30 @@ class TeamScorecard:
     portfolio_decision_type: str | None = None
     portfolio_no_trade: bool = False
     max_new_proposals: int | None = None
+    # --- Phase 7Z: candidate-generation auditability + fresh-state grounding ---
+    # The single exact reason a completed no-trade cycle submitted no order (never
+    # null after a completed cycle), plus the machine-readable outcome and the
+    # current-cycle broker-grounding / reconciliation status.
+    no_trade_reason_class: str | None = None
+    # Set only when execution-eligible proposals existed but no order was submitted
+    # (dry-run / kill switch / review-only / team autonomy off / no broker client).
+    # Mutually exclusive with no_trade_reason_class.
+    execution_block_reason: str | None = None
+    candidate_generation_outcome: dict | None = None
+    reconciliation_status: str | None = None
+    reconciliation_conflicts: list[str] = field(default_factory=list)
+    account_read_ok: bool | None = None
+    account_snapshot_source: str | None = None
+    account_snapshot_time: str | None = None
+    routed_provider: str | None = None
+    routed_model: str | None = None
+    provider_outcome: str | None = None
+    # --- Phase 7Z: same-period benchmark anchors (truthful SPY attribution) ---
+    spy_start_price: float | None = None
+    spy_end_price: float | None = None
+    benchmark_period_start: str | None = None
+    benchmark_period_end: str | None = None
+    benchmark_timeframe: str | None = None
     current_rank: int | None = None
     latest_lessons: list[str] = field(default_factory=list)
     strategy_changes: list[str] = field(default_factory=list)

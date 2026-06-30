@@ -142,7 +142,7 @@ def _patch_loop_steps(monkeypatch, gate_decision):
     monkeypatch.setattr(main, "_evaluate_team_cheap_gate", lambda team: (gate_decision, None))
     monkeypatch.setattr(main, "_cheap_loop_market_open", lambda: True)
 
-    def fake_cycle(team, proposal_source, review_only=False):
+    def fake_cycle(team, proposal_source, review_only=False, **kwargs):
         calls.append(("cycle", team, review_only))
 
     monkeypatch.setattr(main, "run_week_cycle_cli", fake_cycle)

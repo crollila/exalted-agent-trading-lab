@@ -480,7 +480,7 @@ def _patch_loop(monkeypatch, decision):
     monkeypatch.setattr(main, "_cheap_loop_market_open", lambda: True)
     monkeypatch.setattr(main, "run_llm_daily_review", lambda **kw: calls.append(("llm_daily", kw.get("team"))))
 
-    def fake_cycle(team, proposal_source, review_only=False):
+    def fake_cycle(team, proposal_source, review_only=False, **kwargs):
         calls.append(("cycle", team, review_only))
 
     monkeypatch.setattr(main, "run_week_cycle_cli", fake_cycle)

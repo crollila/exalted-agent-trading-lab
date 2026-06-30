@@ -34,6 +34,22 @@ way, reports end-of-day, and stays alive via a watchdog.
 > placement. Deterministic Python remains the final authority for execution and
 > retention.
 
+**Phase 7Z grounding (loop relevance).** Each market-open full cycle is grounded on
+ONE immutable broker snapshot (account + positions read once) that is threaded into
+the Portfolio Manager, candidate-generation context, routing/execution, and the
+iteration audit. A failed live read is recorded as `account_state_unavailable` — the
+loop never treats positions as zero or cash as available when the account is unknown.
+Historical memory (daily summaries, lessons, prior theses, old scorecards, playbook)
+is research feedback only and is reconciled against the snapshot so stale holdings,
+stale low-buying-power claims, or stale short exposure can never masquerade as live
+state. Every completed no-trade cycle records exactly one machine-readable
+`no_trade_reason_class` (never null) and the routed provider/model NAME + failure
+category (never secrets / raw prompt), so a healthy no-trade is always distinguishable
+from a provider failure, invalid model output, a risk rejection, a cap, a health block,
+or an unavailable account. SPY-relative claims use same-period anchors only (`n/a`
+otherwise). Inspect all of this read-only with
+`python -m src.main diagnose-competition-loop --team both`.
+
 ## Memory layers (per team)
 
 | Layer | What | Where | Lifecycle |

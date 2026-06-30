@@ -29,6 +29,16 @@ from pathlib import Path
 from typing import Callable
 
 from src.brokers.alpaca_client import AlpacaClientWrapper
+from src.competition.benchmark import (
+    TIMEFRAME_UNKNOWN,
+    build_benchmark_anchors,
+)
+from src.competition.broker_snapshot import BrokerSnapshot, build_snapshot_from_parts
+from src.competition.candidate_generation import (
+    CandidateGenerationOutcome,
+    classify_candidate_outcome,
+)
+from src.competition.state_reconciliation import ReconciliationResult
 from src.competition.execution import ExecutionRecord, execute_routed_proposals
 from src.competition.proposals import (
     CompetitionProposal,
@@ -272,6 +282,27 @@ class ProposalBundle:
     research_source_ids: list[str] = field(default_factory=list)
     # Optional LLM tactical intent for the Portfolio Manager (Phase 7M, advisory only).
     portfolio_decision: dict | None = None
+    # Phase 7Z: provider/model call outcome (names only; never secrets / raw prompt).
+    provider_called: bool = False
+    provider_failed: bool = False
+    provider_name: str | None = None
+    model_name: str | None = None
+
+    @property
+    def invalid_model_output(self) -> bool:
+        """Provider answered but produced no usable candidate (validation failed).
+
+        Distinguishes a malformed/invalid model response (had errors, parsed
+        nothing) from a genuine empty-candidate response (``model_zero_candidates``)
+        and from a provider/transport failure (``provider_failed``).
+        """
+
+        return (
+            self.provider_called
+            and not self.provider_failed
+            and not self.proposals
+            and bool(self.raw_errors)
+        )
 
 
 def _as_bundle(result) -> ProposalBundle:
@@ -343,6 +374,9 @@ class CycleResult:
     bundle: "ProposalBundle | None" = None
     portfolio_decision: "PortfolioDecision | None" = None
     review_only: bool = False
+    # Phase 7Z: machine-readable candidate-generation outcome + grounding snapshot.
+    candidate_outcome: "CandidateGenerationOutcome | None" = None
+    snapshot: "BrokerSnapshot | None" = None
 
     @property
     def no_trade(self) -> bool:
@@ -351,6 +385,10 @@ class CycleResult:
         if self.portfolio_decision is not None:
             return self.portfolio_decision.is_no_trade()
         return sum(1 for r in self.execution_records if r.submitted) == 0
+
+    @property
+    def no_trade_reason_class(self) -> str | None:
+        return self.candidate_outcome.no_trade_reason_class if self.candidate_outcome else None
 
     def summary(self) -> dict[str, object]:
         return {
@@ -363,6 +401,7 @@ class CycleResult:
                 self.portfolio_decision.decision_type if self.portfolio_decision else None
             ),
             "no_trade": self.no_trade,
+            "no_trade_reason_class": self.no_trade_reason_class,
         }
 
 
@@ -463,11 +502,44 @@ def run_week_cycle(
     portfolio_config: PortfolioManagerConfig | None = None,
     positions: list | None = None,
     review_only: bool = False,
+    snapshot: BrokerSnapshot | None = None,
+    reconciliation: "object | None" = None,
+    spy_start_price: float | None = None,
+    spy_current_price: float | None = None,
+    benchmark_timeframe: str = TIMEFRAME_UNKNOWN,
+    candidate_generation_enabled: bool = True,
+    team_autonomy_enabled: bool = True,
 ) -> CycleResult:
     stage_log: list[str] = []
     ks_engaged = is_engaged(kill_switch_path)
     if review_only:
         stage_log.append("Review-only cycle: portfolio/strategy review + memory; no new broker orders.")
+
+    # Phase 7Z: ground the cycle on ONE immutable current-cycle broker snapshot.
+    # When a caller (e.g. tests / the deterministic path) does not pass one, derive
+    # it from the account + positions already provided so the snapshot is always
+    # available downstream. A real failed live read arrives as an unavailable
+    # snapshot and is honored (never treated as a flat/funded book).
+    if snapshot is None:
+        snapshot = build_snapshot_from_parts(
+            team_id,
+            account={
+                "equity": account.equity,
+                "cash": account.cash,
+                "buying_power": account.buying_power,
+            },
+            raw_positions=positions or [],
+            account_read_ok=True,
+            orders_today=account.orders_today,
+            daily_notional_today=account.daily_notional_today,
+            as_of=account.as_of,
+        )
+        stage_log.append("Stage 0: derived broker snapshot from provided account/positions.")
+    else:
+        stage_log.append(
+            f"Stage 0: broker snapshot {snapshot.status} "
+            f"(source={snapshot.source}, positions={snapshot.position_count})."
+        )
 
     # Stage 1-2: observe + research.
     stage_log.append("Stage 1: observed market/account context.")
@@ -517,6 +589,11 @@ def run_week_cycle(
 
     # Stage 5-6: risk review + deterministic validation via router.
     routing = route_proposals(proposals, permissions, account)
+    # Pre-gate risk-approved count: how many proposals the deterministic risk engine
+    # made execution-eligible BEFORE the portfolio gate (used to distinguish a
+    # review-only submission block — which demotes eligible proposals — from a
+    # genuine no-trade).
+    risk_approved_count = len(routing.execution_eligible)
     # Stage 6b: apply the Portfolio Manager dynamic cap (demotes extra opens to advisory).
     # Review-only forces an advisory-only gate so nothing reaches execution.
     gate_decision = portfolio_decision
@@ -565,8 +642,84 @@ def run_week_cycle(
         (r.decision.premium_at_risk or 0.0) for r in routing.execution_eligible
     )
 
+    # Stage 8b: classify the candidate-generation outcome. A GENUINE no-trade gets
+    # exactly one ``no_trade_reason_class`` (never null); a cycle that produced
+    # execution-eligible proposals but submitted nothing instead gets an explicit
+    # ``execution_block_reason`` (dry-run / kill switch / review-only / team autonomy
+    # off / no broker client) — so a no-trade class never describes an approved cycle.
+    # ``execution_config_enabled`` is the config gate (paper mode AND stocks); the
+    # execution-mode flags below are reported separately and never widen a real gate.
+    execution_config_enabled = permissions.is_paper and permissions.stocks_enabled()
+    pm_allows_new = (
+        portfolio_decision.allowed_to_generate_new_orders
+        and portfolio_decision.max_new_proposals_this_cycle > 0
+    )
+    pm_genuine_hold = portfolio_decision.is_no_trade() and (
+        len(proposals) > 0 or portfolio_decision.low_buying_power
+    )
+    daily_cap_reached = account.orders_today >= permissions.max_daily_orders_per_team
+    provider_failure_category = None
+    if bundle.provider_failed and bundle.raw_errors:
+        first = bundle.raw_errors[0].lower()
+        if any(kw in first for kw in ("api_key", "api key", "missing", "credential", "blank", "not configured", "unavailable")):
+            provider_failure_category = "missing_credentials"
+        elif "non-json" in first or "json" in first or "output must be" in first:
+            provider_failure_category = "invalid_provider_output"
+        else:
+            provider_failure_category = "call_failed"
+    candidate_outcome = classify_candidate_outcome(
+        team_id=team_id,
+        account_available=snapshot.is_available,
+        execution_config_enabled=execution_config_enabled,
+        health_block=portfolio_decision.low_buying_power,
+        health_block_reason=portfolio_decision.rejected_new_ideas_reason,
+        portfolio_manager_allows_new=pm_allows_new,
+        portfolio_manager_is_genuine_hold=pm_genuine_hold,
+        candidate_generation_enabled=candidate_generation_enabled,
+        provider_called=bundle.provider_called,
+        provider_name=bundle.provider_name,
+        model_name=bundle.model_name,
+        provider_failed=bundle.provider_failed,
+        provider_failure_category=provider_failure_category,
+        invalid_model_output=bundle.invalid_model_output,
+        parsed_proposal_count=len(proposals),
+        routed_execution_eligible=len(routing.execution_eligible),
+        routed_simulation_only=len(routing.simulation_only),
+        routed_rejected=len(routing.rejected),
+        orders_submitted=orders_submitted,
+        daily_cap_reached=daily_cap_reached,
+        risk_approved_count=risk_approved_count,
+        dry_run=dry_run,
+        kill_switch_engaged=ks_engaged,
+        review_only=review_only,
+        team_autonomy_enabled=team_autonomy_enabled,
+        broker_client_available=client is not None,
+    )
+    stage_log.append(
+        f"Stage 8b: candidate-generation outcome -> "
+        f"reached={candidate_outcome.reached_candidate_generation}, "
+        f"provider={candidate_outcome.provider_outcome}, "
+        f"no_trade_reason={candidate_outcome.no_trade_reason_class or 'n/a'}, "
+        f"execution_block={candidate_outcome.execution_block_reason or 'n/a'}."
+    )
+
     # Stage 9: post-cycle scorecard.
     state = load_competition_state(competition_dir)
+    reconciliation_status = (
+        reconciliation.status
+        if isinstance(reconciliation, ReconciliationResult)
+        else ("account_state_unavailable" if not snapshot.is_available else "clean")
+    )
+    anchors = build_benchmark_anchors(
+        team_id,
+        timeframe=benchmark_timeframe,
+        period_start=state.week_start,
+        period_end=datetime.now(timezone.utc).isoformat(),
+        team_start_equity=(state.starting_equity or account.equity),
+        team_end_equity=account.equity,
+        spy_start_price=spy_start_price,
+        spy_end_price=spy_current_price,
+    )
     scorecard = TeamScorecard(
         team_id=team_id,
         week_start=state.week_start or datetime.now(timezone.utc).isoformat(),
@@ -589,6 +742,26 @@ def run_week_cycle(
         portfolio_decision_type=portfolio_decision.decision_type,
         portfolio_no_trade=portfolio_decision.is_no_trade(),
         max_new_proposals=portfolio_decision.max_new_proposals_this_cycle,
+        no_trade_reason_class=candidate_outcome.no_trade_reason_class,
+        execution_block_reason=candidate_outcome.execution_block_reason,
+        candidate_generation_outcome=candidate_outcome.as_dict(),
+        reconciliation_status=reconciliation_status,
+        reconciliation_conflicts=(
+            list(reconciliation.warnings())
+            if isinstance(reconciliation, ReconciliationResult)
+            else []
+        ),
+        account_read_ok=snapshot.account_read_ok,
+        account_snapshot_source=snapshot.source,
+        account_snapshot_time=snapshot.snapshot_time,
+        routed_provider=bundle.provider_name,
+        routed_model=bundle.model_name,
+        provider_outcome=candidate_outcome.provider_outcome,
+        spy_start_price=spy_start_price,
+        spy_end_price=spy_current_price,
+        benchmark_period_start=anchors.period_start,
+        benchmark_period_end=anchors.period_end,
+        benchmark_timeframe=anchors.timeframe,
     )
     stage_log.append("Stage 9: built post-cycle scorecard.")
 
@@ -688,6 +861,8 @@ def run_week_cycle(
         bundle=bundle,
         portfolio_decision=portfolio_decision,
         review_only=review_only,
+        candidate_outcome=candidate_outcome,
+        snapshot=snapshot,
     )
 
 
