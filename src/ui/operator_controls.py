@@ -43,6 +43,21 @@ CHEAP_LOOP_COMMAND_TAIL = ("-m", "src.main", "run-cheap-competition-loop")
 CHEAP_LOOP_PROCESS_MARKERS = ("src.main", "run-cheap-competition-loop")
 
 
+# Env marker the spawner sets on a child so the loop can record HOW it was
+# launched (e.g. "watchdog") in its per-iteration audit. Never a secret.
+LOOP_SPAWNED_BY_ENV = "LOOP_SPAWNED_BY"
+
+
+def repo_root() -> Path:
+    """Repository root (parent of ``src/``), anchored to this file's location.
+
+    Used as the spawned cheap-loop child's working directory so it always reads
+    the intended repo-root ``.env`` no matter where the watchdog/UI was started.
+    """
+
+    return Path(__file__).resolve().parent.parent.parent
+
+
 def cheap_loop_pid_path(runtime_dir: Path | str = DEFAULT_RUNTIME_DIR) -> Path:
     return Path(runtime_dir) / "cheap_loop.pid"
 
@@ -102,19 +117,36 @@ def command_has_secret(command: list[str]) -> bool:
     return any(marker in joined for marker in ("SECRET", "TOKEN", "API_KEY", "PASSWORD", "PASSWD"))
 
 
-def _utf8_child_env() -> dict[str, str]:
+def _utf8_child_env(*, spawned_by: str | None = None) -> dict[str, str]:
     """Environment for background children so their redirected output stays UTF-8.
 
     Mirrors the parent environment but forces Python UTF-8 mode and UTF-8 stdio so
     the child's writes to the UTF-8 ``cheap_loop.log`` never fall back to the
     Windows locale code page (cp1252) and crash on symbols like ``≈``. Set from
     interpreter startup, this protects even output emitted before ``main()`` runs.
+
+    When ``spawned_by`` is provided (e.g. ``"watchdog"``) it is exported as
+    ``LOOP_SPAWNED_BY`` so the loop can truthfully record how it was launched in
+    its per-iteration audit. It is a short, non-secret label.
     """
 
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    if spawned_by:
+        env[LOOP_SPAWNED_BY_ENV] = str(spawned_by)
     return env
+
+
+def redacted_command_summary(command: list[str]) -> str:
+    """A safe, single-line summary of a spawn command (never contains secrets).
+
+    The cheap-loop command never carries secrets (verified by
+    :func:`command_has_secret`), but this keeps the contract explicit for logs.
+    """
+
+    joined = " ".join(str(part) for part in command)
+    return "[redacted]" if command_has_secret(command) else joined
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +196,8 @@ def start_cheap_loop(
     team: str = "both",
     llm_review_when_skipped: bool = True,
     python_executable: str | None = None,
+    cwd: Path | str | None = None,
+    spawned_by: str | None = None,
     popen: Callable[..., object] = subprocess.Popen,
     process_checker: Callable[[int | None], bool] = is_process_running,
     detector: Callable[[], list[int]] = detect_cheap_loop_processes,
@@ -172,6 +206,14 @@ def start_cheap_loop(
 
     Refuses if a cheap loop already appears to run (tracked PID alive or detected by
     a system scan). The command is the gated CLI — no secrets, no broker calls here.
+
+    The child is launched with the repository root as its working directory (unless
+    ``cwd`` overrides it) so it always reads the intended repo-root ``.env`` — even
+    when the watchdog/UI was started from a different directory. This is the
+    normal, paper-capable cheap loop: it NEVER injects ``--dry-run-loop`` (a
+    dry-run only happens when ``DRY_RUN=true`` or an operator runs the explicit
+    dry-run command). ``spawned_by`` (e.g. ``"watchdog"``) is recorded in the
+    child env for the per-iteration audit; it is never a secret.
     """
 
     runtime = Path(runtime_dir)
@@ -197,10 +239,17 @@ def start_cheap_loop(
     )
     if command_has_secret(command):  # pragma: no cover - defensive; command never has secrets
         return BotActionResult(False, "Refusing to start: command contains secret-looking text.")
+    child_cwd = str(cwd) if cwd is not None else str(repo_root())
     log_path = cheap_loop_log_path(runtime)
     log_handle = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 - handed to child process
     try:
-        process = popen(command, stdout=log_handle, stderr=subprocess.STDOUT, env=_utf8_child_env())
+        process = popen(
+            command,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=_utf8_child_env(spawned_by=spawned_by),
+            cwd=child_cwd,
+        )
     except Exception as exc:  # pragma: no cover - launch failure path
         log_handle.close()
         return BotActionResult(False, f"Failed to start cheap loop: {exc}")

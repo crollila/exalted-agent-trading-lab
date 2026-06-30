@@ -63,12 +63,14 @@ ACTION_FULL_CYCLE = "full_cycle"
 ACTION_REVIEW_ONLY = "review_only"
 ACTION_CHEAP_SKIP = "cheap_skip"
 ACTION_MARKET_CLOSED = "market_closed"
+ACTION_ERROR = "error"
 
 _ACTION_LABELS = {
     ACTION_FULL_CYCLE: "Full strategy cycle",
     ACTION_REVIEW_ONLY: "Review-only",
     ACTION_CHEAP_SKIP: "Cheap skip",
     ACTION_MARKET_CLOSED: "Market closed (cheap only)",
+    ACTION_ERROR: "Cycle error (no full cycle completed)",
 }
 
 _TEAM_DISPLAY = {"team_alpha": "Team Alpha", "team_beta": "Team Beta"}
@@ -427,6 +429,45 @@ def summarize_memory_for_discord(memory: Any, max_chars: int = BRIEF_SECTION_MAX
     return _NA
 
 
+def _error_iteration_context(
+    team_id: str,
+    *,
+    iteration: int | None,
+    market_state: str,
+    kill_switch_engaged: bool,
+    llm_model_used: str | None,
+    gate_decision: Any,
+    error_stage: str | None,
+    error_type: str | None,
+    error_message: str | None,
+) -> dict[str, Any]:
+    """Compact, current-fact-only context for an ERRORED iteration (Phase 7AA).
+
+    A cycle that raised wrote no current scorecard, so NONE of the stale-artifact
+    reads (scorecard, memory, daily review, attribution) happen here. The brief
+    built from this context shows only what is true right now: the error stage,
+    sanitized type/message, gate intent, market, and kill-switch state.
+    """
+
+    ctx: dict[str, Any] = {
+        "team_id": team_id,
+        "iteration": iteration,
+        "cycle_action": ACTION_ERROR,
+        "market_state": market_state,
+        "kill_switch_engaged": bool(kill_switch_engaged),
+        "llm_model_used": llm_model_used,
+        "error_stage": error_stage,
+        "error_type": error_type,
+        "error_message": error_message,
+        # No current grounding: holdings/thesis/learning/benchmark are all suppressed.
+        "grounding_unavailable": True,
+        "benchmark_anchors_available": False,
+    }
+    if gate_decision is not None:
+        ctx["gate_reason"] = getattr(gate_decision, "reason", None)
+    return ctx
+
+
 def gather_team_iteration_context(
     team_id: str,
     *,
@@ -436,14 +477,37 @@ def gather_team_iteration_context(
     market_state: str = "unknown",
     kill_switch_engaged: bool = False,
     llm_model_used: str | None = None,
+    error_stage: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> dict[str, Any]:
-    """Read local artifacts into a compact, secret-free context dict for the brief."""
+    """Read local artifacts into a compact, secret-free context dict for the brief.
+
+    Phase 7AA: an errored iteration short-circuits to a compact, current-fact-only
+    context (no stale scorecard/memory reads); a completed cycle additionally
+    carries same-period benchmark-anchor availability and current-grounding /
+    zero-position flags so the brief never shows stale SPY-relative or active-
+    holding claims without live support.
+    """
 
     from src.competition.attribution import performance_feedback
     from src.competition.daily_review import load_daily_spy_attribution, load_latest_daily_team_review
     from src.competition.scorecard import load_latest_scorecard
     from src.learning.strategy_memory import StrategyMemory
     from src.learning.team_memory import TeamLearningLedger
+
+    if cycle_action == ACTION_ERROR or error_type is not None:
+        return _error_iteration_context(
+            team_id,
+            iteration=iteration,
+            market_state=market_state,
+            kill_switch_engaged=kill_switch_engaged,
+            llm_model_used=llm_model_used,
+            gate_decision=gate_decision,
+            error_stage=error_stage,
+            error_type=error_type,
+            error_message=error_message,
+        )
 
     scorecard = _safe(lambda: load_latest_scorecard(team_id))
     feedback = _safe(lambda: performance_feedback(team_id), default={}) or {}
@@ -494,6 +558,34 @@ def gather_team_iteration_context(
         ctx["reconciliation_status"] = getattr(scorecard, "reconciliation_status", None)
         ctx["account_read_ok"] = getattr(scorecard, "account_read_ok", None)
         ctx["reconciliation_conflicts"] = list(getattr(scorecard, "reconciliation_conflicts", []) or [])
+        # Phase 7AA: same-period benchmark anchors. An SPY-relative claim is valid
+        # only when BOTH anchors exist; otherwise the brief shows "vs SPY: n/a" and
+        # omits "Why vs SPY" / any beat/loss/excess language (no stale excess).
+        _spy_start = getattr(scorecard, "spy_start_price", None)
+        _spy_end = getattr(scorecard, "spy_end_price", None)
+        anchors_available = _spy_start is not None and _spy_end is not None
+        ctx["benchmark_anchors_available"] = anchors_available
+        if not anchors_available:
+            ctx["spy_return"] = None
+            ctx["excess_return"] = None
+        # Phase 7AA: current grounding + zero-position detection so a current zero-
+        # position broker snapshot never displays stale active-holding language and
+        # an ungrounded read never carries stale holdings/low-buying-power claims.
+        account_read_ok = getattr(scorecard, "account_read_ok", None)
+        ctx["grounding_unavailable"] = account_read_ok is not True
+
+        def _is_zero(value: Any) -> bool:
+            try:
+                return value is None or abs(float(value)) < 1e-9
+            except (TypeError, ValueError):
+                return False
+
+        ctx["zero_positions"] = (
+            account_read_ok is True
+            and _is_zero(getattr(scorecard, "gross_exposure", None))
+            and _is_zero(getattr(scorecard, "net_exposure", None))
+            and _is_zero(getattr(scorecard, "short_exposure", None))
+        )
         if ctx.get("mode") is None:
             # PM mode is not on the scorecard; fall back to the ledger below.
             pass
@@ -591,6 +683,62 @@ def _spy_relative_line(ctx: Mapping[str, Any]) -> str:
     return f"- vs SPY: {claim} (team {_pct(ctx.get('team_return'))} vs SPY {_pct(ctx.get('spy_return'))})"
 
 
+def _spy_relative_section(ctx: Mapping[str, Any], *, why_vs_spy: str) -> list[str]:
+    """SPY-relative lines, honoring same-period benchmark-anchor availability.
+
+    Phase 7AA: when anchors are missing the section collapses to a single
+    ``vs SPY: n/a`` line — ``Why vs SPY`` and ALL beat/loss/excess language are
+    omitted so a stale excess can never be displayed.
+    """
+
+    if ctx.get("benchmark_anchors_available") is False:
+        return ["- vs SPY: n/a (same-period SPY anchors unavailable)"]
+    return [_spy_relative_line(ctx), f"- Why vs SPY: {why_vs_spy}"]
+
+
+def _build_error_brief(
+    team_id: str,
+    ctx: Mapping[str, Any],
+    *,
+    header: str,
+    market: str,
+    ks: str,
+    brief: bool,
+) -> str:
+    """Compact, failure-only brief for an errored iteration (Phase 7AA).
+
+    Shows ONLY current-iteration facts: the error stage, sanitized error
+    type/message, gate intent, market, and kill-switch state. No stale scorecard
+    holdings, thesis, learning, benchmark, or execution-block fields are read or
+    rendered. Secret scrubbing still happens at send time.
+    """
+
+    stage = ctx.get("error_stage") or _NA
+    etype = ctx.get("error_type") or _NA
+    emsg = (
+        compact_sentence(ctx.get("error_message"), BRIEF_SECTION_MAX_CHARS)
+        if ctx.get("error_message")
+        else _NA
+    )
+    raw_why = ctx.get("gate_reason")
+    why = compact_sentence(raw_why, BRIEF_SECTION_MAX_CHARS) if brief else (raw_why or _NA)
+    lines = [
+        header,
+        f"Cycle decision: {_ACTION_LABELS[ACTION_ERROR]}",
+        f"Error stage: {stage}",
+        f"Error type: {etype}",
+        f"Error detail: {emsg}",
+        f"Gate intent: {why}",
+        f"Market: {market} | Kill switch: {ks}",
+        "Grounding: current cycle errored — no current scorecard, holdings, "
+        "benchmark, or execution state available.",
+        "No stale holdings, thesis, learning, or SPY-relative claims are shown for a failed cycle.",
+        f"Model: {ctx.get('llm_model_used') or _NA}",
+        "Safety: Paper-only. LLMs do not execute trades. Orders require deterministic gates.",
+    ]
+    return "\n".join(lines)
+
+
 def _what_changed_line(ctx: Mapping[str, Any], *, brief: bool) -> str:
     """Compact, contradiction-aware "what changed" value for the brief.
 
@@ -637,9 +785,20 @@ def build_team_iteration_update(
     market = ctx.get("market_state", "unknown")
     ks = "ENGAGED (orders blocked)" if ctx.get("kill_switch_engaged") else "off"
 
-    strongest = ctx.get("hypothesis") or (
-        f"top winner {ctx['strongest_symbol']}" if ctx.get("strongest_symbol") else None
-    )
+    # Phase 7AA: a failed cycle gets a compact, failure-only brief grounded in
+    # current facts — never stale scorecard holdings/thesis/learning/benchmark.
+    if action == ACTION_ERROR or ctx.get("error_type"):
+        return _build_error_brief(team_id, ctx, header=header, market=market, ks=ks, brief=brief)
+
+    # Phase 7AA: suppress stale active-holding language when the current snapshot
+    # shows zero positions OR current grounding is unavailable. A bare top-winner
+    # symbol is a holding-like claim; the team's hypothesis is suppressed only when
+    # there is no current grounding to support it.
+    suppress_holdings = bool(ctx.get("zero_positions")) or bool(ctx.get("grounding_unavailable"))
+    strongest = None if ctx.get("grounding_unavailable") else ctx.get("hypothesis")
+    if not strongest and not suppress_holdings and ctx.get("strongest_symbol"):
+        strongest = f"top winner {ctx['strongest_symbol']}"
+    weakest_holding = _NA if suppress_holdings else (ctx.get("weakest_symbol") or _NA)
 
     if brief:
         why = compact_sentence(ctx.get("gate_reason"), BRIEF_SECTION_MAX_CHARS)
@@ -674,10 +833,9 @@ def build_team_iteration_update(
         f"Market: {market} | Kill switch: {ks}",
         "",
         "Current thinking:",
-        _spy_relative_line(ctx),
-        f"- Why vs SPY: {why_vs_spy}",
+        *_spy_relative_section(ctx, why_vs_spy=why_vs_spy),
         f"- Strongest thesis: {strongest_line}",
-        f"- Weakest holding: {ctx.get('weakest_symbol') or _NA}",
+        f"- Weakest holding: {weakest_holding}",
         f"- What changed: {what_changed}",
         f"- Watching next: {watching}",
         "",
@@ -993,19 +1151,22 @@ def post_team_iteration_update(
     dry_run: bool = False,
     state_path: Path | str | None = None,
     now: datetime | None = None,
+    error_stage: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> dict[str, Any]:
     """Decide, build, and (unless dry-run) send a team's iteration brief.
 
-    Returns a small result dict. Never raises — Discord problems only warn.
+    Returns a small result dict. Never raises — Discord problems only warn. Phase
+    7AA: error metadata (when the cycle errored) is threaded through so the brief
+    is a compact failure note grounded in current facts, never a stale scorecard.
     """
 
     config = config or DiscordIterationUpdateConfig.from_env()
     should, reason = should_post_for_action(config, cycle_action=cycle_action, market_state=market_state)
 
-    # Dry-run is always a preview (even when posting rules would skip the send),
-    # so operators can inspect the brief without a token/channel/enable flag.
-    if dry_run:
-        ctx = gather_team_iteration_context(
+    def _ctx() -> dict[str, Any]:
+        return gather_team_iteration_context(
             team_id,
             iteration=iteration,
             cycle_action=cycle_action,
@@ -1013,8 +1174,15 @@ def post_team_iteration_update(
             market_state=market_state,
             kill_switch_engaged=kill_switch_engaged,
             llm_model_used=llm_model_used,
+            error_stage=error_stage,
+            error_type=error_type,
+            error_message=error_message,
         )
-        message = build_team_iteration_update(team_id, ctx, style=config.style)
+
+    # Dry-run is always a preview (even when posting rules would skip the send),
+    # so operators can inspect the brief without a token/channel/enable flag.
+    if dry_run:
+        message = build_team_iteration_update(team_id, _ctx(), style=config.style)
         would = "would post" if should else f"would NOT post ({reason})"
         print(f"[dry-run] {would} Discord iteration update to {team_id}:")
         print(redact_secrets(truncate_discord_message(message, config.max_chars)))
@@ -1023,16 +1191,7 @@ def post_team_iteration_update(
     if not should:
         return {"sent": False, "reason": reason, "message": None}
 
-    ctx = gather_team_iteration_context(
-        team_id,
-        iteration=iteration,
-        cycle_action=cycle_action,
-        gate_decision=gate_decision,
-        market_state=market_state,
-        kill_switch_engaged=kill_switch_engaged,
-        llm_model_used=llm_model_used,
-    )
-    message = build_team_iteration_update(team_id, ctx, style=config.style)
+    message = build_team_iteration_update(team_id, _ctx(), style=config.style)
 
     if not min_interval_ok(team_id, config, state_path=state_path, now=now):
         return {
@@ -1243,6 +1402,7 @@ def iteration_updates_status(
 
 __all__ = [
     "ACTION_CHEAP_SKIP",
+    "ACTION_ERROR",
     "ACTION_FULL_CYCLE",
     "ACTION_MARKET_CLOSED",
     "ACTION_REVIEW_ONLY",

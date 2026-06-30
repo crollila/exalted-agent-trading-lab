@@ -108,6 +108,26 @@ class IterationAuditRecord:
     portfolio_action_submitted: int | None = None
     portfolio_action_rejected_reason: str | None = None
     new_buys_blocked_reason: str | None = None
+    # Phase 7AA: effective execution configuration this iteration (no secrets).
+    # ``execution_mode`` is "dry_run" iff Settings.dry_run is truly true OR the
+    # loop was launched with --dry-run-loop; otherwise "paper_execution_enabled".
+    settings_dry_run: bool | None = None
+    loop_dry_run_flag: bool | None = None
+    execution_mode: str | None = None
+    working_directory: str | None = None
+    spawned_by: str | None = None              # e.g. "watchdog" (how the loop was launched)
+    watchdog_spawned: bool | None = None
+    # Phase 7AA: provenance of the scorecard-derived fields above so a stale prior
+    # scorecard can never masquerade as this iteration's result.
+    #   current     - a fresh scorecard was written by THIS iteration's cycle
+    #   legacy       - reading a prior scorecard for a non-cycle action (cheap skip)
+    #   unavailable - the cycle errored / wrote no scorecard (fields left null)
+    source_freshness: str | None = None
+    # Phase 7AA: structured, sanitized error metadata for an errored iteration.
+    error_stage: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    stages_completed_before_error: list[str] | None = None
     # Failure visibility.
     exception_text: str | None = None
     notes: list[str] = field(default_factory=list)

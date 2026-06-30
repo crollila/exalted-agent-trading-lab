@@ -643,7 +643,13 @@ def run_week_cycle_cli(
         # Provider could not be built (blank/missing key). Use a source that returns
         # an explicit provider-FAILED bundle so the cycle still grounds on fresh
         # state and records `provider_failure` (never a silent zero). No LLM call.
-        from src.agents.model_routing import resolve_model, routing_status
+        # NOTE: ``routing_status`` is already imported at module scope. Importing it
+        # again here would make it a *function-local* name for the whole of
+        # ``run_week_cycle_cli`` (Python binds any name assigned anywhere in a
+        # function as local), which made the sibling ``elif`` branch below raise
+        # ``UnboundLocalError: ... 'routing_status' ...`` on every normal LLM cycle.
+        # Import only the name that is genuinely function-local here.
+        from src.agents.model_routing import resolve_model
         from src.competition.week_competition import ProposalBundle
 
         try:
@@ -1324,6 +1330,157 @@ def _gather_team_loop_facts(team: str, *, settings: Settings, clock: dict | None
     )
 
 
+def _latest_iteration_audit_summary(team_id: str) -> dict:
+    """Read the latest per-iteration audit status for a team (safe subset).
+
+    Returns {} when no audit exists. Surfaces only non-secret, already-redacted
+    fields that the runtime-config + diagnostic commands report.
+    """
+
+    try:
+        from src.competition.iteration_audit import load_latest_status
+
+        status = load_latest_status(team_id) or {}
+    except Exception:  # noqa: BLE001 - diagnostics must never crash
+        return {}
+    keys = (
+        "cycle_action", "finished_at", "execution_mode", "settings_dry_run",
+        "loop_dry_run_flag", "working_directory", "spawned_by", "watchdog_spawned",
+        "source_freshness", "error_stage", "error_type", "error_message",
+        "exception_text",
+    )
+    return {key: status.get(key) for key in keys}
+
+
+def _loop_runtime_config_lines(settings: Settings) -> list[str]:
+    """Build the safe runtime-config report lines (no secrets, paths/booleans only)."""
+
+    from src.ui.operator_controls import (
+        build_cheap_loop_command,
+        cheap_loop_pid_path,
+        redacted_command_summary,
+        repo_root as ops_repo_root,
+    )
+    from src.ui.process_control import is_process_running, read_pid
+
+    permissions = TradingPermissions.from_env()
+    ks = read_kill_switch()
+    repo_env = repo_root_dotenv()
+    cwd_dotenv = find_dotenv(usecwd=True)
+    spawned_by = (os.getenv("LOOP_SPAWNED_BY") or "").strip() or None
+    execution_mode = "dry_run" if settings.dry_run else "paper_execution_enabled"
+    child_cwd = str(ops_repo_root())
+    child_cmd = redacted_command_summary(
+        build_cheap_loop_command(python_executable=sys.executable)
+    )
+    loop_pid = read_pid(cheap_loop_pid_path())
+    loop_alive = is_process_running(loop_pid) if loop_pid is not None else False
+
+    lines: list[str] = []
+    lines.append("Execution configuration (effective; no secrets):")
+    lines.append(f"  settings_dry_run={settings.dry_run}")
+    lines.append(
+        f"  execution_mode={execution_mode}  "
+        "(dry_run ONLY when DRY_RUN=true or an explicit --dry-run-loop)"
+    )
+    lines.append(
+        f"  trading_mode={permissions.trading_mode} is_paper={permissions.is_paper} "
+        f"stocks_enabled={permissions.stocks_enabled()} kill_switch_engaged={ks.engaged}"
+    )
+    lines.append("Process / path metadata:")
+    lines.append(f"  repo_root={child_cwd}")
+    lines.append(f"  current_working_directory={os.getcwd()}")
+    lines.append(
+        f"  intended_repo_dotenv={repo_env or 'NOT FOUND'} exists={repo_env is not None}  "
+        "(the .env the cheap-loop child reads; it runs with repo_root as its CWD)"
+    )
+    lines.append(f"  cwd_dotenv_loaded={cwd_dotenv or 'NOT FOUND'}  (what THIS process read)")
+    lines.append(f"  this_process_spawned_by={spawned_by or 'n/a'}")
+    lines.append(
+        f"  cheap_loop_child_working_directory={child_cwd}  "
+        "(watchdog launches the paper-capable child here so it reads the intended .env)"
+    )
+    lines.append(f"  cheap_loop_child_command={child_cmd}  (never includes --dry-run-loop)")
+    lines.append(f"  tracked_loop_pid={loop_pid} running={loop_alive}")
+    lines.append("Last recorded loop iteration per team (from the audit; no secrets):")
+    for tid in WEEK_TEAMS:
+        summary = _latest_iteration_audit_summary(tid)
+        if not summary:
+            lines.append(f"  [{tid}] no iteration audit recorded yet")
+            continue
+        lines.append(
+            f"  [{tid}] cycle_action={summary.get('cycle_action')} "
+            f"execution_mode={summary.get('execution_mode')} "
+            f"settings_dry_run={summary.get('settings_dry_run')} "
+            f"loop_dry_run_flag={summary.get('loop_dry_run_flag')}"
+        )
+        lines.append(
+            f"        working_directory={summary.get('working_directory')} "
+            f"spawned_by={summary.get('spawned_by')} "
+            f"source_freshness={summary.get('source_freshness')}"
+        )
+        if summary.get("cycle_action") == "error" or summary.get("error_type"):
+            lines.append(
+                f"        last_error: stage={summary.get('error_stage')} "
+                f"type={summary.get('error_type')} message={summary.get('error_message')}"
+            )
+    return lines
+
+
+def _no_order_attempted_reason(facts, audit_summary: dict) -> str:
+    """One explicit, current reason no paper order was attempted (diagnostic only).
+
+    Precedence: a current-iteration ERROR first (so a stale scorecard's dry-run/
+    no-trade can never masquerade as the live reason), then the deterministic
+    config/account/cap/buying-power/market/gate blockers, then last-cycle outcome.
+    """
+
+    if audit_summary and (audit_summary.get("cycle_action") == "error" or audit_summary.get("error_type")):
+        return (
+            f"the most recent iteration ERRORED ({audit_summary.get('error_type') or 'exception'} "
+            f"at stage {audit_summary.get('error_stage') or 'unknown'}); it never reached order submission"
+        )
+    if facts.kill_switch_engaged:
+        return "the kill switch is engaged (execution globally disabled)"
+    if facts.dry_run:
+        return "dry-run mode is active (DRY_RUN=true); cycles run but never submit paper orders"
+    if facts.trading_mode != "paper":
+        return f"TRADING_MODE={facts.trading_mode!r} (not paper); execution surfaces are off"
+    if not facts.stocks_enabled:
+        return "ENABLE_PAPER_STOCKS is off; no execution-eligible stock route"
+    if not facts.account_ok:
+        return f"the team paper account is unreachable ({facts.account_classification})"
+    if facts.orders_today is not None and facts.orders_today >= facts.max_daily_orders_per_team:
+        return f"the daily order cap is reached ({facts.orders_today}/{facts.max_daily_orders_per_team})"
+    if facts.low_buying_power:
+        return "low buying power; the deterministic gate blocks new-money buys"
+    if facts.broker_rejected_count:
+        return "the last cycle's order(s) were broker-rejected (see attribution)"
+    if facts.market_is_open is False and facts.market_hours_only:
+        return "the market is closed; full cycles are suppressed until the next open"
+    if facts.cheap_gate_enabled and not facts.gate_should_run_full_cycle:
+        return "the cheap cycle gate is holding back a full cycle (cost control)"
+    if facts.execution_block_reason:
+        return f"execution-eligible proposals were not submitted last cycle: {facts.execution_block_reason}"
+    if facts.proposals_count == 0:
+        return "the last cycle produced no execution-eligible proposals (can be a healthy no-trade)"
+    return "no blocker found: the next eligible iteration can attempt an order if a proposal clears risk"
+
+
+def run_loop_runtime_config() -> None:
+    """Read-only effective loop runtime configuration (Phase 7AA; no secrets).
+
+    Prints only safe configuration booleans and process/path metadata — never
+    keys, tokens, or secrets. Use it to confirm a watchdog-started loop is in
+    paper-execution (not dry-run) mode and reads the intended local ``.env``.
+    """
+
+    settings = Settings.from_env()
+    print("=== loop-runtime-config (Phase 7AA; paper-only; READ-ONLY; no secrets) ===")
+    for line in _loop_runtime_config_lines(settings):
+        print(line)
+
+
 def run_diagnose_competition_loop(team: str = "both") -> None:
     """Non-trading diagnostic for the cheap competition loop (Phase 7U).
 
@@ -1342,6 +1499,13 @@ def run_diagnose_competition_loop(team: str = "both") -> None:
 
     print("=== diagnose-competition-loop (Phase 7U; paper-only; READ-ONLY; no LLM, no orders) ===")
     print("This command never generates proposals, never calls an LLM, and never submits orders.")
+    print("")
+
+    # Phase 7AA: effective execution config + working dir + .env path so a
+    # watchdog-started dry-run mismatch is immediately visible (no secrets).
+    print("Effective loop runtime configuration (Phase 7AA):")
+    for line in _loop_runtime_config_lines(settings):
+        print(f"  {line}")
     print("")
 
     # Tracked loop process / PID / log state (best-effort; no UI/streamlit import side effects).
@@ -1371,6 +1535,31 @@ def run_diagnose_competition_loop(team: str = "both") -> None:
         facts = _gather_team_loop_facts(tid, settings=settings, clock=clock)
         diagnosis = classify_diagnosis(facts)
         print(format_team_report(facts, diagnosis))
+        # Phase 7AA: latest-iteration error metadata + source freshness + an explicit
+        # "why no paper order was attempted" line grounded in CURRENT facts.
+        audit = _latest_iteration_audit_summary(tid)
+        print("Latest iteration audit (Phase 7AA; current-iteration truth):")
+        if not audit:
+            print("  (no iteration audit recorded yet)")
+        else:
+            print(
+                f"  cycle_action={audit.get('cycle_action')} "
+                f"finished_at={audit.get('finished_at')} "
+                f"source_freshness={audit.get('source_freshness')} "
+                "(current=fresh this cycle, legacy=prior scorecard, unavailable=errored/no scorecard)"
+            )
+            print(
+                f"  execution_mode={audit.get('execution_mode')} "
+                f"settings_dry_run={audit.get('settings_dry_run')} "
+                f"loop_dry_run_flag={audit.get('loop_dry_run_flag')} "
+                f"spawned_by={audit.get('spawned_by')}"
+            )
+            if audit.get("cycle_action") == "error" or audit.get("error_type"):
+                print(
+                    f"  last_error: stage={audit.get('error_stage')} "
+                    f"type={audit.get('error_type')} message={audit.get('error_message')}"
+                )
+        print(f"  >>> no_paper_order_attempted_because: {_no_order_attempted_reason(facts, audit)}")
         print("")
         summary.append((tid, diagnosis.diagnosis))
 
@@ -1978,10 +2167,26 @@ def run_loop_watchdog(
 
     import time as _time
     from src.competition.loop_watchdog import run_watchdog_once
-    from src.ui.operator_controls import detect_cheap_loop_processes, start_cheap_loop
+    from src.ui.operator_controls import (
+        build_cheap_loop_command,
+        detect_cheap_loop_processes,
+        redacted_command_summary,
+        repo_root,
+        start_cheap_loop,
+    )
 
+    child_cwd = str(repo_root())
+    # The normal watchdog child is the paper-capable cheap loop — NEVER the
+    # ``--dry-run-loop`` variant. Surface the exact (secret-free) command + working
+    # directory so an operator can confirm the child reads the intended local .env.
+    child_command = redacted_command_summary(
+        build_cheap_loop_command(sleep_seconds=sleep_seconds, team=team,
+                                 python_executable=sys.executable)
+    )
     print(f"=== loop-watchdog (Phase 7W; paper-only) team={team} sleep={sleep_seconds}s "
           f"stale_threshold={stale_threshold_seconds}s dry_run={dry_run} ===")
+    print(f"Child working directory (reads .env from here): {child_cwd}")
+    print(f"Child command (no secrets; never --dry-run-loop): {child_command}")
     while True:
         health = _gather_loop_health(stale_threshold_seconds)
         ks = read_kill_switch()
@@ -1996,7 +2201,8 @@ def run_loop_watchdog(
                 from types import SimpleNamespace
                 return SimpleNamespace(success=False, message="dry-run: restart suppressed")
             return start_cheap_loop(sleep_seconds=sleep_seconds, team=team,
-                                    python_executable=sys.executable)
+                                    python_executable=sys.executable,
+                                    cwd=child_cwd, spawned_by="watchdog")
 
         result = run_watchdog_once(
             health=health, kill_switch_engaged=ks.engaged,
@@ -2008,6 +2214,27 @@ def run_loop_watchdog(
         if once:
             break
         _time.sleep(sleep_seconds)
+
+
+def _effective_execution_config(settings: Settings, dry_run_loop: bool) -> dict:
+    """Resolve the effective, secret-free execution configuration for this loop.
+
+    ``execution_mode`` is ``dry_run`` iff ``Settings.dry_run`` is truly true OR the
+    loop was launched with ``--dry-run-loop``; otherwise ``paper_execution_enabled``.
+    Also reports the loop's working directory (proving it reads the intended .env)
+    and how it was launched (``LOOP_SPAWNED_BY``, e.g. "watchdog").
+    """
+
+    spawned_by = (os.getenv("LOOP_SPAWNED_BY") or "").strip() or None
+    is_dry = bool(settings.dry_run) or bool(dry_run_loop)
+    return {
+        "settings_dry_run": bool(settings.dry_run),
+        "loop_dry_run_flag": bool(dry_run_loop),
+        "execution_mode": "dry_run" if is_dry else "paper_execution_enabled",
+        "working_directory": os.getcwd(),
+        "spawned_by": spawned_by,
+        "watchdog_spawned": (spawned_by == "watchdog") if spawned_by is not None else None,
+    }
 
 
 def _write_iteration_audit(
@@ -2022,14 +2249,20 @@ def _write_iteration_audit(
     exception_text: str | None,
     settings: Settings,
     portfolio_result: dict | None = None,
+    dry_run_loop: bool = False,
+    error_stage: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Append one durable per-iteration audit record (no secrets, broker-free).
 
-    Counts/account come from the freshly-written post-cycle scorecard; bounded
-    prompt-memory metadata and the portfolio-action state come from the runtime
-    metadata file + the loop's portfolio step. Best-effort: an audit failure
-    prints a notice but never crashes the loop, and an exception during the cycle
-    is always recorded here so a failure can never pass silently.
+    For a completed cycle, counts/account come from the freshly-written post-cycle
+    scorecard. Phase 7AA: when the iteration ERRORED (``cycle_action == 'error'``)
+    the scorecard-derived current-cycle fields are intentionally left null and
+    ``source_freshness='unavailable'`` — a prior scorecard's proposals, holdings,
+    benchmark, execution-block, or grounding state is NEVER substituted into an
+    errored iteration. Structured, sanitized error metadata is recorded instead.
+    Best-effort: an audit failure prints a notice but never crashes the loop.
     """
 
     try:
@@ -2040,10 +2273,32 @@ def _write_iteration_audit(
         )
         from src.competition.prompt_memory import load_prompt_memory_metadata
 
-        scorecard = load_latest_scorecard(team_id)
         permissions = TradingPermissions.from_env()
-        mem = load_prompt_memory_metadata(team_id) or {}
         pr = portfolio_result or {}
+        exec_cfg = _effective_execution_config(settings, dry_run_loop)
+
+        errored = cycle_action == "error" or exception_text is not None
+        # Only a cycle action that actually writes a scorecard yields a "current"
+        # source; an errored cycle wrote none, so its scorecard is unavailable and
+        # must not be read for this iteration's facts.
+        wrote_scorecard_actions = {"full_cycle", "managed_review_only", "review_only"}
+        if errored:
+            source_freshness = "unavailable"
+        elif cycle_action in wrote_scorecard_actions:
+            source_freshness = "current"
+        else:
+            source_freshness = "legacy"
+
+        # Stages we can truthfully confirm completed before an error. The portfolio
+        # review/sell-to-close step runs BEFORE the proposal/risk/order stage, so a
+        # populated portfolio_result means it finished; the later stages did not.
+        stages_completed: list[str] | None = None
+        if errored:
+            stages_completed = ["portfolio_review"] if portfolio_result else []
+
+        # Scorecard is read ONLY for a genuinely fresh current-cycle result.
+        scorecard = None if errored else load_latest_scorecard(team_id)
+        mem = {} if errored else (load_prompt_memory_metadata(team_id) or {})
         cgo = (getattr(scorecard, "candidate_generation_outcome", None) or {}) if scorecard else {}
         spy_start = getattr(scorecard, "spy_start_price", None) if scorecard else None
         spy_end = getattr(scorecard, "spy_end_price", None) if scorecard else None
@@ -2096,11 +2351,25 @@ def _write_iteration_audit(
             memory_scorecard_included=mem.get("scorecard_included"),
             memory_bounded_context_chars=mem.get("bounded_context_chars"),
             memory_malformed_sources=mem.get("malformed_or_unavailable"),
+            # Portfolio-action state is fresh from THIS iteration's portfolio step
+            # (it runs before the error), so it is safe to record even on error.
             portfolio_action_recommended=pr.get("recommended"),
             portfolio_action_eligible=pr.get("eligible"),
             portfolio_action_submitted=pr.get("submitted"),
             portfolio_action_rejected_reason=pr.get("rejected_reason"),
             new_buys_blocked_reason=pr.get("new_buys_blocked_reason"),
+            # Phase 7AA: effective execution config + provenance + error metadata.
+            settings_dry_run=exec_cfg["settings_dry_run"],
+            loop_dry_run_flag=exec_cfg["loop_dry_run_flag"],
+            execution_mode=exec_cfg["execution_mode"],
+            working_directory=exec_cfg["working_directory"],
+            spawned_by=exec_cfg["spawned_by"],
+            watchdog_spawned=exec_cfg["watchdog_spawned"],
+            source_freshness=source_freshness,
+            error_stage=error_stage,
+            error_type=error_type,
+            error_message=error_message,
+            stages_completed_before_error=stages_completed,
             exception_text=exception_text,
         )
         append_iteration_record(record)
@@ -2300,6 +2569,9 @@ def run_cheap_competition_loop(
             iteration_started_at = now_utc().isoformat()
             cycle_action = "cheap_skip"
             exception_text: str | None = None
+            error_stage: str | None = None
+            error_type: str | None = None
+            error_message: str | None = None
             decision, _gate_config = _evaluate_team_cheap_gate(tid)
             print(
                 f"[{tid}] gate: should_run_full_cycle={decision.should_run_full_cycle} "
@@ -2360,11 +2632,19 @@ def run_cheap_competition_loop(
                     else:
                         print(f"[{tid}] staying cheap this iteration (no full cycle).")
             except SystemExit as exc:
-                exception_text = f"SystemExit({exc.code}) during {cycle_action}"
+                # ``cycle_action`` still holds the STAGE being attempted (full_cycle /
+                # managed_review_only / review_only) — capture it before overwriting.
+                error_stage = cycle_action
+                error_type = "SystemExit"
+                error_message = f"exit code {exc.code}"
+                exception_text = f"SystemExit({exc.code}) during {error_stage}"
                 print(f"!! [{tid}] cycle aborted: {exception_text}; continuing loop (logged to audit).")
                 cycle_action = "error"
             except Exception as exc:  # noqa: BLE001 - a cycle failure must not kill the loop
-                exception_text = f"{type(exc).__name__}: {exc}"
+                error_stage = cycle_action
+                error_type = type(exc).__name__
+                error_message = str(exc)
+                exception_text = f"{error_type}: {exc}"
                 print(f"!! [{tid}] cycle FAILED: {exception_text}; continuing loop (logged to audit).")
                 cycle_action = "error"
 
@@ -2380,9 +2660,15 @@ def run_cheap_competition_loop(
                 exception_text=exception_text,
                 settings=Settings.from_env(),
                 portfolio_result=portfolio_result,
+                dry_run_loop=dry_run_loop,
+                error_stage=error_stage,
+                error_type=error_type,
+                error_message=error_message,
             )
 
             # Phase 7S: post a concise team-thought brief to that team's Discord channel.
+            # Phase 7AA: an errored cycle passes its error metadata so the brief is a
+            # compact failure note grounded in CURRENT facts, never a stale scorecard.
             _post_discord_iteration_update(
                 config=discord_update_config,
                 team_id=tid,
@@ -2393,6 +2679,9 @@ def run_cheap_competition_loop(
                 kill_switch_engaged=ks.engaged,
                 llm_review_when_skipped=llm_review_when_skipped,
                 dry_run=dry_run_loop,
+                error_stage=error_stage,
+                error_type=error_type,
+                error_message=error_message,
             )
 
         allow_daily_review_at_close = (
@@ -2599,6 +2888,9 @@ def _post_discord_iteration_update(
     kill_switch_engaged: bool,
     llm_review_when_skipped: bool,
     dry_run: bool,
+    error_stage: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Post a team's Discord iteration brief. Never crashes the loop."""
 
@@ -2617,6 +2909,9 @@ def _post_discord_iteration_update(
             llm_model_used=_iteration_llm_model(cycle_action, llm_review_when_skipped),
             config=config,
             dry_run=dry_run,
+            error_stage=error_stage,
+            error_type=error_type,
+            error_message=error_message,
         )
     except Exception as exc:  # noqa: BLE001 - Discord posting must never crash the loop
         print(f"(Discord iteration update failed for {team_id}: {exc}; continuing loop)")
@@ -3397,7 +3692,41 @@ def _apply_status_filter(
     return filter_strategy_ids_by_status(strategy_names, status_by_strategy, status_filter)
 
 
+def repo_root() -> Path:
+    """Absolute path to the repository root (the parent of ``src/``).
+
+    Anchored to this file's location, so it is correct no matter the process
+    working directory. The watchdog uses the operator-controls equivalent to set
+    the spawned cheap-loop child's working directory to the repo root.
+    """
+
+    return Path(__file__).resolve().parent.parent
+
+
+def repo_root_dotenv() -> Path | None:
+    """The intended repo-root ``.env`` path, anchored to ``__file__`` (CWD-free).
+
+    Reporting/diagnostic helper only — it shows operators the local config the
+    cheap-loop child is meant to read (the watchdog launches that child with the
+    repo root as its working directory). It does NOT change how any CLI command
+    loads ``.env``; that stays CWD-relative (see :func:`load_cli_dotenv`).
+    """
+
+    root_env = repo_root() / ".env"
+    return root_env if root_env.is_file() else None
+
+
 def load_cli_dotenv() -> None:
+    """Load ``.env`` from the current working directory upward (CLI contract).
+
+    This stays CWD-relative on purpose: every ``python -m src.main`` invocation
+    reads the ``.env`` of wherever it was launched. The watchdog-started dry-run
+    mismatch is fixed at the spawn site instead — ``start_cheap_loop`` launches the
+    cheap-loop child with the repo root as its working directory, so the child's
+    CWD-relative discovery reliably finds the intended repo ``.env`` (where
+    ``DRY_RUN=false``). ``override=False`` keeps an explicitly exported variable.
+    """
+
     dotenv_path = find_dotenv(usecwd=True)
     if dotenv_path:
         load_dotenv(dotenv_path=dotenv_path, override=False)
@@ -4004,6 +4333,10 @@ def main() -> None:
         "weekly-review-status", help="Read-only weekly review delivery status (no secrets).",
     )
     weekly_status_parser.add_argument("--team", default="both", help="Team(s): alpha, beta, both.")
+    subparsers.add_parser(
+        "loop-runtime-config",
+        help="Read-only effective loop execution config + process/path metadata (no secrets).",
+    )
     loop_health_parser = subparsers.add_parser(
         "loop-health", help="Read-only loop liveness (PID + heartbeat + per-team status).",
     )
@@ -4191,6 +4524,8 @@ def main() -> None:
         run_eod_report_status(team=args.team)
     elif args.command == "weekly-review-status":
         run_weekly_review_status(team=args.team)
+    elif args.command == "loop-runtime-config":
+        run_loop_runtime_config()
     elif args.command == "loop-health":
         run_loop_health(stale_threshold_seconds=args.stale_threshold_seconds)
     elif args.command == "loop-watchdog":
