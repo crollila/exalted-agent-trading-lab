@@ -85,11 +85,49 @@ def record_day(
     return day
 
 
+TRADING_DAYS_PER_YEAR = 252
+
+
+def risk_stats(daily_returns: list[float]) -> dict[str, float | None]:
+    """Annualized Sharpe (0% risk-free), annualized volatility, max drawdown.
+
+    Needs >= 5 observed days for Sharpe/vol to mean anything; below that they
+    are None rather than noise dressed as statistics.
+    """
+
+    n = len(daily_returns)
+    out: dict[str, float | None] = {"sharpe": None, "volatility": None, "max_drawdown": None}
+    if n == 0:
+        return out
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    for r in daily_returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity / peak - 1)
+    out["max_drawdown"] = max_dd
+
+    if n >= 5:
+        mean = sum(daily_returns) / n
+        variance = sum((r - mean) ** 2 for r in daily_returns) / (n - 1)
+        std = variance ** 0.5
+        out["volatility"] = std * TRADING_DAYS_PER_YEAR ** 0.5
+        if std > 1e-12:
+            out["sharpe"] = (mean / std) * TRADING_DAYS_PER_YEAR ** 0.5
+    return out
+
+
 def totals(scoreboard: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {
-        team_id: {"days": 0, "beat_spy": 0, "lost_to_spy": 0, "h2h_wins": 0, "cum_return": None}
+        team_id: {
+            "days": 0, "beat_spy": 0, "lost_to_spy": 0, "h2h_wins": 0, "cum_return": None,
+            "sharpe": None, "volatility": None, "max_drawdown": None,
+        }
         for team_id in TEAM_IDS
     }
+    returns_by_team: dict[str, list[float]] = {team_id: [] for team_id in TEAM_IDS}
     ties = 0
     for day in scoreboard.get("days", []):
         h2h = day.get("head_to_head")
@@ -102,6 +140,7 @@ def totals(scoreboard: dict[str, Any]) -> dict[str, Any]:
                 continue
             stats = out[team_id]
             stats["days"] += 1
+            returns_by_team[team_id].append(r)
             if team_day.get("beat_spy") is True:
                 stats["beat_spy"] += 1
             elif team_day.get("beat_spy") is False:
@@ -110,6 +149,8 @@ def totals(scoreboard: dict[str, Any]) -> dict[str, Any]:
                 stats["h2h_wins"] += 1
             compounded = (1 + (stats["cum_return"] or 0.0)) * (1 + r) - 1
             stats["cum_return"] = compounded
+    for team_id in TEAM_IDS:
+        out[team_id].update(risk_stats(returns_by_team[team_id]))
     out["ties"] = ties
     return out
 
@@ -143,9 +184,12 @@ def render(scoreboard: dict[str, Any], last_days: int = 10) -> str:
     lines.append(f"Trading days scored: {len(days)} | SPY cumulative: {_pct(spy_cum)}")
     for team_id in TEAM_IDS:
         s = stats[team_id]
+        sharpe = "n/a" if s["sharpe"] is None else f"{s['sharpe']:.2f}"
+        drawdown = "n/a" if s["max_drawdown"] is None else _pct(s["max_drawdown"])
         lines.append(
             f"{TEAM_DISPLAY_NAMES[team_id]}: cumulative {_pct(s['cum_return'])} | "
-            f"vs SPY {s['beat_spy']}W-{s['lost_to_spy']}L | head-to-head wins {s['h2h_wins']}"
+            f"vs SPY {s['beat_spy']}W-{s['lost_to_spy']}L | head-to-head wins {s['h2h_wins']} | "
+            f"Sharpe {sharpe} | max drawdown {drawdown}"
         )
     if stats["ties"]:
         lines.append(f"Head-to-head ties: {stats['ties']}")

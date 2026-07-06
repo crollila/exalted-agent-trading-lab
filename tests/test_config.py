@@ -24,8 +24,12 @@ def test_defaults(monkeypatch):
     settings = Settings.from_env(dotenv=False)
     assert settings.llm_provider == "openai"
     assert settings.cycle_minutes == 30
-    assert settings.risk.max_position_pct == 0.15
+    assert settings.risk.max_position_pct == 0.30
+    assert settings.risk.max_gross_exposure == 2.0
     assert settings.risk.allow_shorts is True
+    assert settings.risk.allow_margin is True
+    assert settings.risk.allow_options is True
+    assert settings.enable_web_research is True
     assert not settings.dry_run
     assert len(settings.teams) == 2
     assert not settings.team("team_alpha").has_credentials
@@ -61,7 +65,7 @@ def test_bad_numbers_fall_back(monkeypatch):
     monkeypatch.setenv("MAX_POSITION_PCT", "big")
     settings = Settings.from_env(dotenv=False)
     assert settings.cycle_minutes == 30
-    assert settings.risk.max_position_pct == 0.15
+    assert settings.risk.max_position_pct == 0.30
 
 
 def test_unknown_team_raises():

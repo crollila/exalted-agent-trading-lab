@@ -107,3 +107,37 @@ def test_record_day_handles_unknown_returns(tmp_path):
 
 def test_render_empty_scoreboard(tmp_path):
     assert "No trading days recorded yet" in render(load_scoreboard(tmp_path))
+def test_risk_stats_sharpe_vol_drawdown():
+    from src.scoreboard import risk_stats
+
+    # Deterministic series: +1%, -0.5%, +1%, -0.5%, +1% (n=5)
+    returns = [0.01, -0.005, 0.01, -0.005, 0.01]
+    stats = risk_stats(returns)
+    assert stats["sharpe"] is not None and stats["sharpe"] > 0
+    assert stats["volatility"] is not None and stats["volatility"] > 0
+    # Max drawdown is the single worst dip: -0.5%
+    assert abs(stats["max_drawdown"] - (-0.005)) < 1e-9
+
+
+def test_risk_stats_too_few_days():
+    from src.scoreboard import risk_stats
+
+    stats = risk_stats([0.01, 0.02])
+    assert stats["sharpe"] is None and stats["volatility"] is None
+    assert stats["max_drawdown"] is not None
+    assert risk_stats([]) == {"sharpe": None, "volatility": None, "max_drawdown": None}
+
+
+def test_render_includes_sharpe_and_drawdown(tmp_path):
+    from src.scoreboard import load_scoreboard, record_day, render
+
+    for i in range(6):
+        record_day(
+            tmp_path, date=f"2026-07-{10 + i:02d}",
+            team_returns={"team_alpha": 0.01 if i % 2 else -0.004, "team_beta": 0.001},
+            team_equities={"team_alpha": 1.0, "team_beta": 1.0},
+            spy_return=0.002,
+        )
+    text = render(load_scoreboard(tmp_path))
+    assert "Sharpe" in text
+    assert "max drawdown" in text

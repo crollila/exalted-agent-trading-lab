@@ -46,3 +46,32 @@ def test_weekend_is_false():
 
 def test_unknown_next_open_is_false():
     assert not is_pre_open_today(None, now=ny_dt(2026, 7, 6, 8, 0))
+
+
+# --- per-team cadence from charters ------------------------------------------
+
+def test_per_team_cadence(settings):
+    from src.charter import TeamCharter
+    from src.loop import next_due, seconds_until_next_due
+
+    # Pin distinct cadences: alpha every 10 min, beta every 40 min.
+    for team_id, minutes in (("team_alpha", 10), ("team_beta", 40)):
+        charter = TeamCharter.load(team_id, settings.data_dir, settings.risk)
+        charter.apply_updates({"cycle_minutes": minutes}, settings.risk, "test")
+        charter.save()
+
+    # Never ran -> both due immediately.
+    assert next_due({}, settings, now=1000.0) == ["team_alpha", "team_beta"]
+
+    # Both just ran at t=1000: at t+601s only alpha (10 min) is due.
+    last = {"team_alpha": 1000.0, "team_beta": 1000.0}
+    assert next_due(last, settings, now=1000.0 + 601) == ["team_alpha"]
+    assert next_due(last, settings, now=1000.0 + 2401) == ["team_alpha", "team_beta"]
+
+    # Wait until next due: alpha ran 300s ago -> 10*60-300 = 300s remaining.
+    last = {"team_alpha": 1000.0, "team_beta": 1000.0}
+    wait = seconds_until_next_due(last, settings, now=1300.0)
+    assert wait == 300.0
+
+    # Never-ran team -> short poll.
+    assert seconds_until_next_due({"team_alpha": 1000.0}, settings, now=1000.0) == 30.0
