@@ -50,6 +50,10 @@ DEBRIEF = json.dumps({
     "what_we_learned": "Selective momentum beat broad beta today.",
     "plan_going_forward": "Hold winners, cut TSLA if it reclaims its open.",
 })
+REBUTTAL = json.dumps({
+    "rebuttal": "Nice day, but chasing AAPL after a 5% pop is late money.",
+    "lessons_from_rival": ["Rival's earnings-aware exits avoided a gap loss; copy that."],
+})
 
 
 def test_run_eod_scores_learns_and_reports(settings, monkeypatch):
@@ -67,8 +71,11 @@ def test_run_eod_scores_learns_and_reports(settings, monkeypatch):
         "team_alpha": EodBroker(equity=1_010_000.0, last_equity=1_000_000.0),  # +1.0%
         "team_beta": EodBroker(equity=998_000.0, last_equity=1_000_000.0),     # -0.2%
     }
-    # Per team: 3 reflections + 1 debrief, alpha first then beta.
-    llm = make_llm(settings, [REFLECTION] * 3 + [DEBRIEF] + [REFLECTION] * 3 + [DEBRIEF])
+    # Per team: 3 reflections + 1 debrief (alpha then beta), then 2 rebuttals.
+    llm = make_llm(
+        settings,
+        [REFLECTION] * 3 + [DEBRIEF] + [REFLECTION] * 3 + [DEBRIEF] + [REBUTTAL, REBUTTAL],
+    )
 
     report_path = run_eod(settings, llm=llm, brokers=brokers)
     report = open(report_path, encoding="utf-8").read()
@@ -86,10 +93,16 @@ def test_run_eod_scores_learns_and_reports(settings, monkeypatch):
     assert memory.lessons[-1]["text"] == "Watch pre-market gaps."
     assert memory.days_recorded == 1 and memory.wins_vs_spy == 1
 
-    # The report carries the debrief sections and the trade.
+    # Cross-team learning: rival lessons landed in the strategist memory.
+    strategist = AgentMemory.load("team_alpha", "strategist", settings.data_dir)
+    assert any("[from rival]" in l["text"] for l in strategist.lessons)
+
+    # The report carries the debrief sections, the rebuttal, and the trade.
     assert "What we did today" in report
     assert "We bought 259 AAPL" in report
     assert "How we intend to go forward" in report
+    assert "Rebuttal to" in report
+    assert "chasing AAPL" in report
     assert "BUY 259 AAPL" in report
     assert "COMPETITION SCOREBOARD" in report
 

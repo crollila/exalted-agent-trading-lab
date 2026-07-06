@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from src.broker import AccountInfo, AssetInfo, Broker, ClockInfo, OrderResult, SnapshotInfo
 from src.cycle import run_team_cycle
 from src.kill_switch import engage
 from src.ledger import read_trades
 from tests.test_agents_parsing import make_llm
+
+
+@pytest.fixture(autouse=True)
+def no_earnings_lookup(monkeypatch):
+    """Cycle tests must never hit yfinance; earnings degrade to empty."""
+
+    monkeypatch.setattr("src.cycle.days_to_earnings", lambda symbols, data_dir, **kw: {})
 
 
 class FakeBroker(Broker):
@@ -47,6 +56,12 @@ class FakeBroker(Broker):
 
     def news(self, symbols, limit=12, lookback_hours=36):
         return []
+
+    def movers(self, top=8):
+        return []
+
+    def resolve_option(self, underlying, option_type, *, ref_price, dte_target=30, moneyness="atm"):
+        return None
 
     def asset(self, symbol):
         return AssetInfo(symbol=symbol.upper(), tradable=True, shortable=True)

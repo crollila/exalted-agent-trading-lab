@@ -48,22 +48,32 @@ def cmd_eod(settings: Settings, _args) -> None:
 
 def cmd_status(settings: Settings, _args) -> None:
     from src.broker import broker_for_team
+    from src.charter import TeamCharter
     from src.memory import AgentMemory
     from src.notify import recent_errors
+    from src.watchlist import TeamWatchlist
 
     print("=== Exalted Agent Trading Lab — status (paper only) ===")
     print(read_kill_switch().describe())
     print(f"LLM provider: {settings.llm_provider} | default model: {settings.model_default}")
-    print(f"Cycle interval: {settings.cycle_minutes} min | dry_run: {settings.dry_run}")
-    print(f"Risk: max position {settings.risk.max_position_pct:.0%}, "
-          f"gross exposure {settings.risk.max_gross_exposure:.0%}, "
-          f"shorts={'on' if settings.risk.allow_shorts else 'off'}, "
+    print(f"Web research: {'on' if settings.enable_web_research else 'off'} | dry_run: {settings.dry_run}")
+    print(f"Platform caps (teams cannot exceed): position {settings.risk.max_position_pct:.0%}, "
+          f"gross {settings.risk.max_gross_exposure:.0%}, "
           f"{settings.risk.max_orders_per_day} orders/day, "
-          f"${settings.risk.max_daily_notional:,.0f} notional/day")
+          f"${settings.risk.max_daily_notional:,.0f} notional/day, "
+          f"options premium {settings.risk.max_option_premium_pct:.0%}/trade "
+          f"(long calls/puts only)")
 
     clock_shown = False
     for team_id in TEAM_IDS:
         print(f"\n--- {TEAM_DISPLAY_NAMES[team_id]} ---")
+        charter = TeamCharter.load(team_id, settings.data_dir, settings.risk)
+        watchlist = TeamWatchlist.load(team_id, settings.data_dir, settings.watchlist)
+        print(f"Charter (self-chosen): pos {charter.max_position_pct:.0%} | "
+              f"gross {charter.max_gross_exposure:.0%} | every {charter.cycle_minutes} min | "
+              f"[{', '.join(charter.instruments)}]")
+        print(f"  style: {charter.style[:120]}")
+        print(f"Watchlist ({len(watchlist.symbols)}): {', '.join(watchlist.symbols)}")
         try:
             broker = broker_for_team(settings, team_id)
             if not clock_shown:
@@ -80,7 +90,7 @@ def cmd_status(settings: Settings, _args) -> None:
             print(f"Positions: {len(positions)}")
             for p in positions:
                 pl = f"{p.unrealized_plpc * 100:+.1f}%" if p.unrealized_plpc is not None else "n/a"
-                print(f"  {p.side} {p.qty:g} {p.symbol} @ {p.avg_entry_price:,.2f} ({pl})")
+                print(f"  {p.side} {p.describe()} @ {p.avg_entry_price:,.2f} ({pl})")
             print(f"Orders today: {len(broker.orders_today())}")
         except Exception as exc:  # noqa: BLE001 - status must show the problem, not crash
             print(f"UNAVAILABLE: {exc}")

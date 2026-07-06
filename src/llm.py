@@ -119,3 +119,41 @@ class LLM:
             messages=[{"role": "user", "content": user}],
         )
         return message.content[0].text
+
+    # --- completion with live web search --------------------------------------
+
+    @property
+    def supports_web_search(self) -> bool:
+        return self.provider == "openai" and self.settings.enable_web_research
+
+    def complete_json_with_web(self, role: str, system: str, user: str) -> dict[str, Any]:
+        """JSON completion where the model may SEARCH THE LIVE WEB first.
+
+        Uses OpenAI's built-in web_search tool via the Responses API, so the
+        researcher can pull in anything on the internet (news, filings, chatter)
+        without this project running a scraper. Web content is untrusted input:
+        the agents only ever emit proposal JSON and the deterministic risk
+        engine gates every order, so a malicious page can at worst suggest a
+        bad idea — which the engine sizes and caps like any other.
+
+        Falls back to the plain completion on any web-tool failure (visibly:
+        the caller sees no citations) and for non-OpenAI providers.
+        """
+
+        if not self.supports_web_search:
+            return self.complete_json(role, system, user)
+        model = self.settings.model_for(role)
+        client = self._get_client()
+        try:
+            response = client.responses.create(
+                model=model,
+                tools=[{"type": "web_search"}],
+                instructions=system,
+                input=user,
+            )
+            return parse_json_object(getattr(response, "output_text", None))
+        except LLMError:
+            raise  # bad JSON from a successful call: surface it, don't double-call
+        except Exception as exc:  # noqa: BLE001 - web tool unavailable -> plain call
+            print(f"(web search unavailable for {role}: {exc}; using non-web call.)")
+            return self.complete_json(role, system, user)

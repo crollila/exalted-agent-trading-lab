@@ -35,17 +35,74 @@ class AccountInfo:
 
 @dataclass(frozen=True)
 class PositionInfo:
-    symbol: str
-    qty: float           # positive; use side for direction
+    symbol: str          # stock ticker OR OCC option symbol
+    qty: float           # positive; use side for direction (contracts for options)
     side: str            # "long" | "short"
     avg_entry_price: float
     current_price: float | None
     market_value: float  # signed (negative for shorts)
     unrealized_plpc: float | None  # e.g. 0.031 = +3.1%
+    asset_class: str = "us_equity"  # "us_equity" | "us_option"
 
     @property
     def notional(self) -> float:
         return abs(self.market_value)
+
+    @property
+    def is_option(self) -> bool:
+        return self.asset_class == "us_option"
+
+    def describe(self) -> str:
+        """Human-readable label, expanding OCC option symbols."""
+
+        if self.is_option:
+            parsed = parse_occ_symbol(self.symbol)
+            if parsed:
+                return (
+                    f"{parsed['underlying']} {parsed['expiration']} "
+                    f"${parsed['strike']:g} {parsed['option_type']} x{self.qty:g}"
+                )
+        return f"{self.symbol} x{self.qty:g}"
+
+
+def parse_occ_symbol(occ: str) -> dict | None:
+    """Parse an OCC option symbol like ``NVDA260717C00200000``.
+
+    Returns {underlying, expiration (YYYY-MM-DD), option_type, strike} or None.
+    """
+
+    occ = (occ or "").strip().upper()
+    if len(occ) < 16 or occ[-9] not in ("C", "P") or not occ[-8:].isdigit():
+        return None
+    root = occ[:-15]
+    date_part = occ[-15:-9]
+    if not root or not date_part.isdigit():
+        return None
+    return {
+        "underlying": root,
+        "expiration": f"20{date_part[0:2]}-{date_part[2:4]}-{date_part[4:6]}",
+        "option_type": "call" if occ[-9] == "C" else "put",
+        "strike": int(occ[-8:]) / 1000.0,
+    }
+
+
+@dataclass(frozen=True)
+class OptionContract:
+    occ_symbol: str
+    underlying: str
+    option_type: str     # "call" | "put"
+    strike: float
+    expiration: str      # YYYY-MM-DD
+    dte: int
+    bid: float | None
+    ask: float | None
+
+
+@dataclass(frozen=True)
+class MoverInfo:
+    symbol: str
+    percent_change: float | None
+    note: str            # "top gainer" / "top loser" / "most active"
 
 
 @dataclass(frozen=True)
@@ -113,9 +170,13 @@ class Broker:
     trading_client_factory: Callable[[], Any] | None = None
     data_client_factory: Callable[[], Any] | None = None
     news_client_factory: Callable[[], Any] | None = None
+    option_client_factory: Callable[[], Any] | None = None
+    screener_client_factory: Callable[[], Any] | None = None
     _trading: Any = field(default=None, init=False, repr=False)
     _data: Any = field(default=None, init=False, repr=False)
     _news: Any = field(default=None, init=False, repr=False)
+    _option: Any = field(default=None, init=False, repr=False)
+    _screener: Any = field(default=None, init=False, repr=False)
 
     # --- clients -----------------------------------------------------------
 
@@ -150,6 +211,28 @@ class Broker:
                 self._news = NewsClient(api_key=self.api_key, secret_key=self.secret_key)
         return self._news
 
+    def _option_client(self) -> Any:
+        if self._option is None:
+            if self.option_client_factory is not None:
+                self._option = self.option_client_factory()
+            else:
+                from alpaca.data.historical.option import OptionHistoricalDataClient
+
+                self._option = OptionHistoricalDataClient(
+                    api_key=self.api_key, secret_key=self.secret_key
+                )
+        return self._option
+
+    def _screener_client(self) -> Any:
+        if self._screener is None:
+            if self.screener_client_factory is not None:
+                self._screener = self.screener_client_factory()
+            else:
+                from alpaca.data.historical.screener import ScreenerClient
+
+                self._screener = ScreenerClient(api_key=self.api_key, secret_key=self.secret_key)
+        return self._screener
+
     # --- reads -------------------------------------------------------------
 
     def account(self) -> AccountInfo:
@@ -168,6 +251,7 @@ class Broker:
             side = "short" if "short" in side else "long"
             current = getattr(p, "current_price", None)
             plpc = getattr(p, "unrealized_plpc", None)
+            asset_class = str(getattr(getattr(p, "asset_class", ""), "value", getattr(p, "asset_class", ""))).lower()
             out.append(
                 PositionInfo(
                     symbol=str(p.symbol).upper(),
@@ -175,8 +259,9 @@ class Broker:
                     side=side,
                     avg_entry_price=float(p.avg_entry_price),
                     current_price=float(current) if current is not None else None,
-                    market_value=float(p.market_value),
+                    market_value=float(p.market_value or 0),
                     unrealized_plpc=float(plpc) if plpc is not None else None,
+                    asset_class="us_option" if "option" in asset_class else "us_equity",
                 )
             )
         return out
@@ -239,14 +324,18 @@ class Broker:
         return len(self.orders_today())
 
     def notional_submitted_today(self, price_of: Callable[[str], float | None]) -> float:
-        """Gross notional of today's non-failed orders (filled price preferred)."""
+        """Gross notional of today's non-failed orders (filled price preferred).
+
+        Option orders count at premium x 100 (the contract multiplier).
+        """
 
         total = 0.0
         for order in self.orders_today():
             if order.status in _TERMINAL_FAILED_STATUSES:
                 continue
             price = order.filled_avg_price or price_of(order.symbol) or 0.0
-            total += abs(order.qty) * price
+            multiplier = 100.0 if parse_occ_symbol(order.symbol) else 1.0
+            total += abs(order.qty) * price * multiplier
         return total
 
     def snapshots(self, symbols: list[str]) -> dict[str, SnapshotInfo]:
@@ -317,6 +406,117 @@ class Broker:
             symbol=symbol.upper(),
             tradable=bool(getattr(a, "tradable", False)),
             shortable=bool(getattr(a, "shortable", False)),
+        )
+
+    def movers(self, top: int = 8) -> list[MoverInfo]:
+        """Today's top gainers/losers + most actives (best-effort, may be [])."""
+
+        out: list[MoverInfo] = []
+        try:
+            from alpaca.data.requests import MarketMoversRequest
+
+            movers = self._screener_client().get_market_movers(MarketMoversRequest(top=top))
+            for m in getattr(movers, "gainers", []) or []:
+                out.append(MoverInfo(str(m.symbol).upper(), float(m.percent_change), "top gainer"))
+            for m in getattr(movers, "losers", []) or []:
+                out.append(MoverInfo(str(m.symbol).upper(), float(m.percent_change), "top loser"))
+        except Exception as exc:  # noqa: BLE001 - screener is optional context
+            print(f"(market movers unavailable: {exc})")
+        try:
+            from alpaca.data.requests import MostActivesRequest
+
+            actives = self._screener_client().get_most_actives(MostActivesRequest(top=top))
+            for m in getattr(actives, "most_actives", []) or []:
+                out.append(MoverInfo(str(m.symbol).upper(), None, "most active"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"(most actives unavailable: {exc})")
+        return out
+
+    def resolve_option(
+        self,
+        underlying: str,
+        option_type: str,
+        *,
+        ref_price: float,
+        dte_target: int = 30,
+        moneyness: str = "atm",
+    ) -> OptionContract | None:
+        """Pick a concrete long call/put contract for a strategist's intent.
+
+        Deterministic selection: expiration closest to ``dte_target`` (within
+        [dte_target-7, dte_target+21], minimum 3 DTE), then strike closest to
+        the moneyness target (ATM, or ~5% OTM). Returns None when no tradable
+        contract or no quote is available — the engine then rejects the idea.
+        """
+
+        option_type = option_type.lower()
+        if option_type not in ("call", "put"):
+            return None
+        target_strike = ref_price
+        if moneyness == "otm":
+            target_strike = ref_price * (1.05 if option_type == "call" else 0.95)
+
+        try:
+            from alpaca.trading.requests import GetOptionContractsRequest
+
+            today = now_utc().date()
+            request = GetOptionContractsRequest(
+                underlying_symbols=[underlying.upper()],
+                type=option_type,
+                expiration_date_gte=today + timedelta(days=max(3, dte_target - 7)),
+                expiration_date_lte=today + timedelta(days=dte_target + 21),
+                strike_price_gte=str(round(target_strike * 0.85, 2)),
+                strike_price_lte=str(round(target_strike * 1.15, 2)),
+                limit=200,
+            )
+            response = self._trading_client().get_option_contracts(request)
+            contracts = list(getattr(response, "option_contracts", None) or [])
+        except Exception as exc:  # noqa: BLE001 - no chain -> no trade, visibly
+            print(f"(option chain unavailable for {underlying}: {exc})")
+            return None
+        if not contracts:
+            return None
+
+        def _expiry(c: Any):
+            raw = getattr(c, "expiration_date", None)
+            return raw if isinstance(raw, date) else datetime.strptime(str(raw), "%Y-%m-%d").date()
+
+        today = now_utc().date()
+        best = min(
+            (c for c in contracts if getattr(c, "tradable", True)),
+            key=lambda c: (
+                abs((_expiry(c) - today).days - dte_target),
+                abs(float(c.strike_price) - target_strike),
+            ),
+            default=None,
+        )
+        if best is None:
+            return None
+        occ = str(best.symbol).upper()
+
+        bid = ask = None
+        try:
+            from alpaca.data.requests import OptionLatestQuoteRequest
+
+            quotes = self._option_client().get_option_latest_quote(
+                OptionLatestQuoteRequest(symbol_or_symbols=occ)
+            )
+            quote = quotes.get(occ) if hasattr(quotes, "get") else getattr(quotes, occ, None)
+            if quote is not None:
+                bid = float(getattr(quote, "bid_price", 0) or 0) or None
+                ask = float(getattr(quote, "ask_price", 0) or 0) or None
+        except Exception as exc:  # noqa: BLE001 - no quote -> engine rejects
+            print(f"(option quote unavailable for {occ}: {exc})")
+
+        return OptionContract(
+            occ_symbol=occ,
+            underlying=underlying.upper(),
+            option_type=option_type,
+            strike=float(best.strike_price),
+            expiration=_expiry(best).isoformat(),
+            dte=(_expiry(best) - today).days,
+            bid=bid,
+            ask=ask,
         )
 
     # --- trading -----------------------------------------------------------

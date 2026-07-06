@@ -40,6 +40,7 @@ def settings(tmp_path, team_alpha) -> Settings:
         model_default="test-model",
         data_dir=tmp_path / "data",
         risk=RiskLimits(),
+        enable_web_research=False,  # tests never hit the network
     )
 
 

@@ -65,27 +65,44 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class RiskLimits:
-    """Deterministic hard caps. The risk-analyst agent may only veto or shrink
-    trades; these caps are enforced in code afterwards and always win."""
+    """PLATFORM hard caps — the walls of the sandbox.
 
-    max_position_pct: float = 0.15      # max single-position weight of equity
-    max_gross_exposure: float = 1.00    # sum(|position notional|) / equity
-    min_cash_pct: float = 0.05          # cash floor that buys may not break
-    max_orders_per_day: int = 40        # per team, ET-scoped
-    max_daily_notional: float = 500_000.0
+    Teams choose their own risk appetite in their charter (see charter.py) and
+    may change it any cycle, but every charter value is clamped to these and
+    the deterministic risk engine enforces the tighter of the two. Teams can
+    never edit these; only .env can.
+    """
+
+    max_position_pct: float = 0.30       # ceiling on a single position's weight
+    max_gross_exposure: float = 2.00     # ceiling on sum(|positions|)/equity (paper margin)
+    max_orders_per_day: int = 100        # per team, ET-scoped
+    max_daily_notional: float = 2_000_000.0
     allow_shorts: bool = True
+    allow_margin: bool = True
+    allow_options: bool = True           # LONG calls/puts only; never naked selling
+    max_option_premium_pct: float = 0.03        # premium at risk per option trade
+    max_total_option_premium_pct: float = 0.10  # total open premium at risk
     max_proposals_per_cycle: int = 3
+    min_cycle_minutes: int = 5           # fastest cadence a charter may choose
+    max_cycle_minutes: int = 120
 
     @classmethod
     def from_env(cls) -> "RiskLimits":
         return cls(
             max_position_pct=_env_float("MAX_POSITION_PCT", cls.max_position_pct),
             max_gross_exposure=_env_float("MAX_GROSS_EXPOSURE", cls.max_gross_exposure),
-            min_cash_pct=_env_float("MIN_CASH_PCT", cls.min_cash_pct),
             max_orders_per_day=_env_int("MAX_ORDERS_PER_DAY", cls.max_orders_per_day),
             max_daily_notional=_env_float("MAX_DAILY_NOTIONAL", cls.max_daily_notional),
             allow_shorts=_env_bool("ALLOW_SHORTS", cls.allow_shorts),
+            allow_margin=_env_bool("ALLOW_MARGIN", cls.allow_margin),
+            allow_options=_env_bool("ALLOW_OPTIONS", cls.allow_options),
+            max_option_premium_pct=_env_float("MAX_OPTION_PREMIUM_PCT", cls.max_option_premium_pct),
+            max_total_option_premium_pct=_env_float(
+                "MAX_TOTAL_OPTION_PREMIUM_PCT", cls.max_total_option_premium_pct
+            ),
             max_proposals_per_cycle=_env_int("MAX_PROPOSALS_PER_CYCLE", cls.max_proposals_per_cycle),
+            min_cycle_minutes=_env_int("MIN_CYCLE_MINUTES", cls.min_cycle_minutes),
+            max_cycle_minutes=_env_int("MAX_CYCLE_MINUTES", cls.max_cycle_minutes),
         )
 
 
@@ -117,6 +134,7 @@ class Settings:
     data_dir: Path = Path("data")
     watchlist: tuple[str, ...] = DEFAULT_WATCHLIST
     news_items_per_cycle: int = 12
+    enable_web_research: bool = True
     discord_bot_token: str | None = None
     discord_channel_id: str | None = None
 
@@ -176,6 +194,7 @@ class Settings:
             data_dir=Path(os.getenv("DATA_DIR") or "data"),
             watchlist=watchlist,
             news_items_per_cycle=_env_int("NEWS_ITEMS_PER_CYCLE", 12),
+            enable_web_research=_env_bool("ENABLE_WEB_RESEARCH", True),
             discord_bot_token=(os.getenv("DISCORD_BOT_TOKEN") or "").strip() or None,
             discord_channel_id=(
                 (os.getenv("DISCORD_CHANNEL_ID") or os.getenv("DISCORD_PAPER_TRADING_LOG_CHANNEL_ID") or "").strip()
