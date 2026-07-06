@@ -1,1006 +1,160 @@
+"""Command-line entry point.
+
+    python -m src.main run                      # the forever competition loop
+    python -m src.main cycle [--team X] [--force] [--dry-run]
+    python -m src.main eod                      # score + learn + report, now
+    python -m src.main status                   # accounts, positions, market, memory
+    python -m src.main scoreboard               # who is winning
+    python -m src.main kill on|off [--reason]   # pause/resume all trading
+"""
+
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import sys
 
-from dotenv import find_dotenv, load_dotenv
+from src.config import ROLES, TEAM_DISPLAY_NAMES, TEAM_IDS, Settings
+from src.kill_switch import disengage, engage, read_kill_switch
+from src.market_time import ny_trading_date
 
-from src.agents.hermes_team_registry import format_hermes_team_registry, load_hermes_team_registry_file
-from src.agents.hermes_strategy_sandbox import format_hermes_sandbox_result, load_hermes_sandbox_file
-from src.agents.hermes_tournament_round import (
-    format_hermes_tournament_round,
-    run_hermes_tournament_round,
-    save_hermes_tournament_round_artifacts,
-)
-from src.agents.hermes_runtime import (
-    HermesGenerationRequest,
-    HermesRuntimeConfig,
-    format_hermes_generation_result,
-    generate_hermes_proposals,
-)
-from src.brokers.alpaca_client import AlpacaClientWrapper
-from src.config.settings import Settings
-from src.db.database import initialize_database
-from src.execution.local_runner import SIMULATION_FIXTURES, run_strategy_dry_run
-from src.reporting.analysis_notes import create_strategy_analysis_note
-from src.reporting.fixture_sweep import (
-    format_fixture_sweep,
-    save_fixture_sweep_artifacts,
-    summarize_fixture_sweep,
-)
-from src.reporting.fixture_sweep_analysis_notes import create_sweep_analysis_note
-from src.reporting.fixture_sweep_leaderboard_export import export_fixture_sweep_leaderboard
-from src.reporting.leaderboard_export import export_strategy_leaderboard
-from src.reporting.report_generator import format_report, generate_daily_report
-from src.reporting.research_decisions import (
-    ALLOWED_RESEARCH_DECISIONS,
-    DEFAULT_DECISION_LEDGER_PATH,
-    read_research_decision_ledger,
-    record_research_decision,
-)
-from src.reporting.shorting_simulation_report import (
-    DEFAULT_SHORT_SIMULATION_REPORT_PATH,
-    export_shorting_simulation_report,
-)
-from src.reporting.strategy_status import (
-    ALLOWED_STRATEGY_STATUSES,
-    ALLOWED_STATUS_FILTER_VALUES,
-    DEFAULT_STRATEGY_STATUS_PATH,
-    StrategyStatusFilter,
-    filter_strategy_ids_by_status,
-    format_status_filter_summary,
-    load_latest_strategy_statuses,
-    parse_status_filter_values,
-    read_strategy_status_registry,
-    set_strategy_status,
-    status_filter_to_metadata,
-)
-from src.reporting.strategy_comparison import (
-    format_strategy_comparison,
-    rank_strategy_reports,
-    save_strategy_comparison_artifacts,
-)
-from src.reporting.tournament_champion import format_tournament_champion, load_tournament_champion
-from src.reporting.tournament_history import format_tournament_history, load_tournament_history
-from src.strategies.base import Strategy
-from src.strategies.cash_only import CashOnlyStrategy
-from src.strategies.hermes_fixtures import (
-    HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID,
-    HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID,
-    HermesAggressiveFixtureStrategy,
-    HermesConservativeFixtureStrategy,
-)
-from src.strategies.momentum_v1 import MomentumV1Strategy
-from src.strategies.spy_buy_hold import SpyBuyHoldStrategy
 
+def cmd_run(settings: Settings, _args) -> None:
+    from src.loop import run_forever
 
-HERMES_FIXTURE_STRATEGIES = (
-    HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID,
-    HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID,
-)
-KNOWN_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1", *HERMES_FIXTURE_STRATEGIES)
-DEFAULT_COMPARISON_STRATEGIES = ("cash_only", "spy_buy_hold", "momentum_v1")
-COMPARISON_FIXTURES = SIMULATION_FIXTURES
-FIXTURE_SWEEP_FIXTURES = tuple(fixture for fixture in COMPARISON_FIXTURES if fixture != "flat")
+    run_forever(settings)
 
 
-def run_init_db() -> None:
-    settings = Settings.from_env()
-    initialize_database(settings.database_path)
-    print(f"Initialized database at {settings.database_path}")
+def cmd_cycle(settings: Settings, args) -> None:
+    from src.cycle import run_team_cycle
 
+    teams = TEAM_IDS if args.team == "both" else (args.team,)
+    for team_id in teams:
+        result = run_team_cycle(settings, team_id, force=args.force, dry_run=args.dry_run or None)
+        print(f"\n=== {team_id} cycle ===")
+        for line in result.narrative:
+            print(f"  {line}")
+        if result.error:
+            raise SystemExit(f"Cycle failed: {result.error}")
+        if result.audit_path:
+            print(f"  (full audit: {result.audit_path})")
 
-def build_strategy(strategy_name: str) -> Strategy:
-    if strategy_name == "cash_only":
-        return CashOnlyStrategy()
-    if strategy_name == "spy_buy_hold":
-        return SpyBuyHoldStrategy()
-    if strategy_name == "momentum_v1":
-        return MomentumV1Strategy()
-    if strategy_name == HERMES_CONSERVATIVE_FIXTURE_STRATEGY_ID:
-        return HermesConservativeFixtureStrategy()
-    if strategy_name == HERMES_AGGRESSIVE_FIXTURE_STRATEGY_ID:
-        return HermesAggressiveFixtureStrategy()
-    raise ValueError(f"Unknown strategy: {strategy_name}")
 
+def cmd_eod(settings: Settings, _args) -> None:
+    from src.eod import run_eod
 
-def run_dry_run(strategy_name: str = "spy_buy_hold") -> None:
-    settings = Settings.from_env()
-    initialize_database(settings.database_path)
-    strategy = build_strategy(strategy_name)
-    result = run_strategy_dry_run(strategy, settings)
+    report = run_eod(settings)
+    print(f"End-of-day pass complete. Report: {report}")
 
-    print(
-        f"Dry run complete. Strategy: {result.strategy_id}. "
-        f"Run ID: {result.run_id}. Proposals processed: {result.proposal_count}. Daily report logged."
-    )
 
+def cmd_status(settings: Settings, _args) -> None:
+    from src.broker import broker_for_team
+    from src.memory import AgentMemory
+    from src.notify import recent_errors
 
-def run_paper_status() -> None:
-    settings = Settings.from_env()
+    print("=== Exalted Agent Trading Lab — status (paper only) ===")
+    print(read_kill_switch().describe())
+    print(f"LLM provider: {settings.llm_provider} | default model: {settings.model_default}")
+    print(f"Cycle interval: {settings.cycle_minutes} min | dry_run: {settings.dry_run}")
+    print(f"Risk: max position {settings.risk.max_position_pct:.0%}, "
+          f"gross exposure {settings.risk.max_gross_exposure:.0%}, "
+          f"shorts={'on' if settings.risk.allow_shorts else 'off'}, "
+          f"{settings.risk.max_orders_per_day} orders/day, "
+          f"${settings.risk.max_daily_notional:,.0f} notional/day")
 
-    try:
-        client = AlpacaClientWrapper(settings=settings)
-        account = client.get_account()
-        positions = client.get_positions()
-        market_open = client.is_market_open()
-    except (RuntimeError, ValueError) as exc:
-        print(f"Paper status unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(f"Account equity: {_read_value(account, 'equity')}")
-    print(f"Cash: {_read_value(account, 'cash')}")
-    print(f"Buying power: {_read_value(account, 'buying_power')}")
-    print(f"Market status: {'open' if market_open else 'closed'}")
-    print(f"Positions count: {len(positions)}")
-
-
-def _read_value(obj: object, name: str) -> object:
-    if isinstance(obj, dict):
-        return obj.get(name, "unknown")
-    return getattr(obj, name, "unknown")
-
-
-def run_report(run_id: str | None = None) -> None:
-    settings = Settings.from_env()
-    initialize_database(settings.database_path)
-    result = generate_daily_report(settings.database_path, run_id=run_id)
-    if not result.ok or result.report is None:
-        print(f"Report unavailable: {result.message}")
-        raise SystemExit(1)
-
-    print(format_report(result.report))
-
-
-def run_compare_strategies(
-    strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES,
-    fixture: str = "multi_day",
-    save: bool = False,
-    output_dir: Path | str = Path("data/experiments"),
-    include_hermes_fixtures: bool = False,
-    exclude_retired: bool = False,
-    status_values: str | None = None,
-    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
-) -> None:
-    settings = Settings.from_env()
-    initialize_database(settings.database_path)
-    selected_strategy_names = _comparison_strategy_names(
-        strategy_names=strategy_names,
-        include_hermes_fixtures=include_hermes_fixtures,
-    )
-    filter_result = _apply_status_filter(
-        selected_strategy_names,
-        exclude_retired=exclude_retired,
-        status_values=status_values,
-        status_registry_path=status_registry_path,
-    )
-    selected_strategy_names = filter_result.selected_strategy_ids
-    if filter_result.filter.applied:
-        print(format_status_filter_summary(filter_result))
-        print("")
-    if not selected_strategy_names:
-        print("Comparison skipped: status filtering excluded every selected strategy.")
-        return
-
-    reports: list[dict] = []
-    for strategy_name in selected_strategy_names:
-        strategy = build_strategy(strategy_name)
-        local_result = run_strategy_dry_run(strategy, settings, simulation_fixture=fixture)
-        report_result = generate_daily_report(settings.database_path, run_id=local_result.run_id)
-        if not report_result.ok or report_result.report is None:
-            print(f"Comparison unavailable for {strategy.strategy_id}: {report_result.message}")
-            raise SystemExit(1)
-        reports.append(report_result.report)
-
-    print(format_strategy_comparison(reports))
-    if save:
-        artifacts = save_strategy_comparison_artifacts(
-            reports=reports,
-            fixture_name=fixture,
-            output_dir=output_dir,
-            status_filter_metadata=status_filter_to_metadata(filter_result),
-        )
-        print("Saved comparison artifacts:")
-        print(f"JSON: {artifacts.json_path}")
-        print(f"CSV: {artifacts.csv_path}")
-        print(f"Markdown: {artifacts.markdown_path}")
-
-
-def run_fixture_sweep(
-    strategy_names: tuple[str, ...] = DEFAULT_COMPARISON_STRATEGIES,
-    include_hermes_fixtures: bool = False,
-    save: bool = False,
-    output_dir: Path | str = Path("data/experiments"),
-    exclude_retired: bool = False,
-    status_values: str | None = None,
-    status_registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
-) -> None:
-    settings = Settings.from_env()
-    initialize_database(settings.database_path)
-    selected_strategy_names = _comparison_strategy_names(
-        strategy_names=strategy_names,
-        include_hermes_fixtures=include_hermes_fixtures,
-    )
-    filter_result = _apply_status_filter(
-        selected_strategy_names,
-        exclude_retired=exclude_retired,
-        status_values=status_values,
-        status_registry_path=status_registry_path,
-    )
-    selected_strategy_names = filter_result.selected_strategy_ids
-    if not selected_strategy_names:
-        if filter_result.filter.applied:
-            print(format_status_filter_summary(filter_result))
-            print("")
-        print("Fixture sweep skipped: status filtering excluded every selected strategy.")
-        return
-
-    ranked_results_by_fixture: dict[str, list[dict]] = {}
-    for fixture in FIXTURE_SWEEP_FIXTURES:
-        reports: list[dict] = []
-        for strategy_name in selected_strategy_names:
-            strategy = build_strategy(strategy_name)
-            local_result = run_strategy_dry_run(strategy, settings, simulation_fixture=fixture)
-            report_result = generate_daily_report(settings.database_path, run_id=local_result.run_id)
-            if not report_result.ok or report_result.report is None:
-                print(f"Fixture sweep unavailable for {fixture}/{strategy.strategy_id}: {report_result.message}")
-                raise SystemExit(1)
-            reports.append(report_result.report)
-        ranked_results_by_fixture[fixture] = rank_strategy_reports(reports)
-
-    summary = summarize_fixture_sweep(ranked_results_by_fixture)
-    status_by_strategy = load_latest_strategy_statuses(status_registry_path)
-    if filter_result.filter.applied:
-        print(format_status_filter_summary(filter_result))
-        print("")
-    print(
-        format_fixture_sweep(
-            summary,
-            status_by_strategy=status_by_strategy,
-        )
-    )
-    if save:
-        artifacts = save_fixture_sweep_artifacts(
-            summary=summary,
-            output_dir=output_dir,
-            status_by_strategy=status_by_strategy,
-            status_filter_metadata=status_filter_to_metadata(filter_result),
-        )
-        print("Saved fixture sweep artifacts:")
-        print(f"JSON: {artifacts.json_path}")
-        print(f"CSV: {artifacts.csv_path}")
-        print(f"Markdown: {artifacts.markdown_path}")
-
-
-def run_tournament_history(output_dir: Path | str = Path("data/experiments")) -> None:
-    history = load_tournament_history(output_dir)
-    print(format_tournament_history(history, output_dir=output_dir))
-
-
-def run_tournament_champion(output_dir: Path | str = Path("data/experiments")) -> None:
-    champion = load_tournament_champion(output_dir)
-    print(
-        format_tournament_champion(
-            champion,
-            output_dir=output_dir,
-            status_by_strategy=load_latest_strategy_statuses(),
-        )
-    )
-
-
-def run_export_leaderboard(
-    output_dir: Path | str = Path("data/experiments"),
-    report_path: Path | str = Path("data/reports/strategy_leaderboard.md"),
-) -> None:
-    result = export_strategy_leaderboard(output_dir=output_dir, report_path=report_path)
-    print(result.message)
-
-
-def run_export_fixture_sweep_leaderboard(
-    output_dir: Path | str = Path("data/experiments"),
-    report_path: Path | str = Path("data/reports/fixture_sweep_leaderboard.md"),
-) -> None:
-    result = export_fixture_sweep_leaderboard(output_dir=output_dir, report_path=report_path)
-    print(result.message)
-
-
-def run_export_short_simulation_report(
-    report_path: Path | str = DEFAULT_SHORT_SIMULATION_REPORT_PATH,
-) -> None:
-    result = export_shorting_simulation_report(report_path=report_path)
-    print("simulation only")
-    print(result.message)
-
-
-def run_review_hermes_sandbox(file_path: Path | str) -> None:
-    result = load_hermes_sandbox_file(file_path)
-    print(format_hermes_sandbox_result(result))
-    if not result.ok:
-        raise SystemExit(1)
-
-
-def run_hermes_teams(file_path: Path | str) -> None:
-    try:
-        registry = load_hermes_team_registry_file(file_path)
-    except ValueError as exc:
-        print(f"Hermes team registry unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(format_hermes_team_registry(registry))
-
-
-def run_hermes_tournament_round_cli(
-    registry_path: Path | str,
-    proposal_paths: list[Path | str],
-    save: bool = False,
-    output_dir: Path | str = Path("data/experiments"),
-) -> None:
-    try:
-        result = run_hermes_tournament_round(
-            registry_path=registry_path,
-            proposal_paths=proposal_paths,
-        )
-    except ValueError as exc:
-        print(f"Hermes tournament round unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(format_hermes_tournament_round(result))
-    if save:
-        artifacts = save_hermes_tournament_round_artifacts(result, output_dir=output_dir)
-        print("Saved Hermes tournament round artifacts:")
-        print(f"JSON: {artifacts.json_path}")
-        print(f"Markdown: {artifacts.markdown_path}")
-
-
-def run_hermes_generate_proposals_cli(
-    team_id: str,
-    agent_id: str,
-    agent_role: str,
-    strategy_id: str,
-    output_file: Path | str,
-    learning_goal: str | None = None,
-    strategy_notes: str | None = None,
-) -> None:
-    try:
-        result = generate_hermes_proposals(
-            config=HermesRuntimeConfig.from_env(),
-            request=HermesGenerationRequest(
-                team_id=team_id,
-                agent_id=agent_id,
-                agent_role=agent_role,
-                strategy_id=strategy_id,
-                learning_goal=learning_goal,
-                strategy_notes=strategy_notes,
-            ),
-            output_file=output_file,
-        )
-    except (RuntimeError, ValueError) as exc:
-        print(f"Hermes proposal generation unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(format_hermes_generation_result(result))
-
-
-def run_discord_bot_cli() -> None:
-    from src.discord_bot.bot import run_discord_bot
-
-    run_discord_bot()
-
-
-def run_dashboard_cli() -> None:
-    """Launch the local-only Streamlit operator dashboard (paper-only, no live trading)."""
-
-    import subprocess
-    import sys
-
-    dashboard_path = Path(__file__).resolve().parent / "ui" / "dashboard.py"
-    print("Starting the ExaltedFable local dashboard (paper-only; no live trading).")
-    print(f"If the browser does not open automatically, run: streamlit run {dashboard_path}")
-
-    try:
-        import streamlit  # noqa: F401
-    except ImportError:
-        print("Streamlit is not installed. Install it first with: pip install streamlit")
-        print(f"Then run: streamlit run {dashboard_path}")
-        raise SystemExit(1)
-
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(dashboard_path)], check=False)
-
-
-def run_desktop_app_cli() -> None:
-    """Launch the desktop-style local app wrapper around Streamlit."""
-
-    from src.ui.desktop_app import launch_desktop_app
-
-    raise SystemExit(launch_desktop_app())
-
-
-def run_create_analysis_note(
-    output_dir: Path | str = Path("data/experiments"),
-    notes_dir: Path | str = Path("data/notes"),
-    force: bool = False,
-) -> None:
-    result = create_strategy_analysis_note(output_dir=output_dir, notes_dir=notes_dir, force=force)
-    print(result.message)
-
-
-def run_create_sweep_analysis_note(
-    output_dir: Path | str = Path("data/experiments"),
-    notes_dir: Path | str = Path("data/notes"),
-    force: bool = False,
-) -> None:
-    result = create_sweep_analysis_note(output_dir=output_dir, notes_dir=notes_dir, force=force)
-    print(result.message)
-
-
-def run_record_research_decision(
-    strategy_id: str,
-    decision: str,
-    reason: str,
-    ledger_path: Path | str = DEFAULT_DECISION_LEDGER_PATH,
-    source_note: Path | str | None = None,
-    next_action: str | None = None,
-) -> None:
-    try:
-        result = record_research_decision(
-            strategy_id=strategy_id,
-            decision=decision,
-            reason=reason,
-            ledger_path=ledger_path,
-            source_note=source_note,
-            next_action=next_action,
-        )
-    except ValueError as exc:
-        print(f"Research decision unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(result.message)
-
-
-def run_research_decisions(ledger_path: Path | str = DEFAULT_DECISION_LEDGER_PATH) -> None:
-    result = read_research_decision_ledger(ledger_path=ledger_path)
-    print(result.message)
-
-
-def run_set_strategy_status(
-    strategy_id: str,
-    status: str,
-    reason: str,
-    registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH,
-    source_note: Path | str | None = None,
-    next_action: str | None = None,
-) -> None:
-    try:
-        result = set_strategy_status(
-            strategy_id=strategy_id,
-            status=status,
-            reason=reason,
-            registry_path=registry_path,
-            source_note=source_note,
-            next_action=next_action,
-        )
-    except ValueError as exc:
-        print(f"Strategy status unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    print(result.message)
-
-
-def run_strategy_status(registry_path: Path | str = DEFAULT_STRATEGY_STATUS_PATH) -> None:
-    result = read_strategy_status_registry(registry_path=registry_path)
-    print(result.message)
-
-
-def _comparison_strategy_names(
-    strategy_names: tuple[str, ...],
-    include_hermes_fixtures: bool,
-) -> tuple[str, ...]:
-    if not include_hermes_fixtures:
-        return strategy_names
-
-    selected = list(strategy_names)
-    for strategy_name in HERMES_FIXTURE_STRATEGIES:
-        if strategy_name not in selected:
-            selected.append(strategy_name)
-    return tuple(selected)
-
-
-def _apply_status_filter(
-    strategy_names: tuple[str, ...],
-    exclude_retired: bool,
-    status_values: str | None,
-    status_registry_path: Path | str,
-):
-    try:
-        included_statuses = parse_status_filter_values(status_values)
-    except ValueError as exc:
-        print(f"Status filter unavailable: {exc}")
-        raise SystemExit(1) from exc
-
-    status_filter = StrategyStatusFilter(
-        exclude_retired=exclude_retired,
-        included_statuses=included_statuses,
-    )
-    status_by_strategy = load_latest_strategy_statuses(status_registry_path)
-    return filter_strategy_ids_by_status(strategy_names, status_by_strategy, status_filter)
-
-
-def load_cli_dotenv() -> None:
-    dotenv_path = find_dotenv(usecwd=True)
-    if dotenv_path:
-        load_dotenv(dotenv_path=dotenv_path, override=False)
-
-
-def main() -> None:
-    load_cli_dotenv()
-    parser = argparse.ArgumentParser(description="ExaltedFable Agent Trading Lab")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    subparsers.add_parser("init-db", help="Initialize SQLite database")
-    dry_run_parser = subparsers.add_parser("dry-run", help="Run a local dry-run strategy cycle")
-    dry_run_parser.add_argument(
-        "--strategy",
-        choices=KNOWN_STRATEGIES,
-        default="spy_buy_hold",
-        help="Local deterministic strategy to run. Defaults to spy_buy_hold.",
-    )
-    subparsers.add_parser("paper-status", help="Show Alpaca paper account status")
-    report_parser = subparsers.add_parser("report", help="Generate a local benchmark report")
-    report_parser.add_argument(
-        "--run-id",
-        help="Generate a report for a specific run ID. Defaults to the latest run.",
-    )
-    report_parser.add_argument(
-        "--latest",
-        action="store_true",
-        help="Generate a report for the latest run. This is the default.",
-    )
-    compare_parser = subparsers.add_parser(
-        "compare-strategies",
-        help="Run local dry-run strategies and print a run-aware comparison",
-    )
-    compare_parser.add_argument(
-        "--strategies",
-        nargs="+",
-        choices=KNOWN_STRATEGIES,
-        default=DEFAULT_COMPARISON_STRATEGIES,
-        help="Local strategies to compare. Defaults to cash_only, spy_buy_hold, and momentum_v1.",
-    )
-    compare_parser.add_argument(
-        "--fixture",
-        choices=COMPARISON_FIXTURES,
-        default="multi_day",
-        help="Deterministic local simulation fixture for comparison reports. Defaults to multi_day.",
-    )
-    compare_parser.add_argument(
-        "--save",
-        action="store_true",
-        help="Save JSON, CSV, and Markdown comparison artifacts to the output directory.",
-    )
-    compare_parser.add_argument(
-        "--include-hermes-fixtures",
-        action="store_true",
-        help="Include parser-only local Hermes JSON fixture strategies in the comparison.",
-    )
-    compare_parser.add_argument(
-        "--exclude-retired",
-        action="store_true",
-        help="Opt in to excluding strategies whose latest research status is retired.",
-    )
-    compare_parser.add_argument(
-        "--status",
-        help=(
-            "Opt in to including only these comma-separated research statuses. "
-            f"Allowed: {', '.join(ALLOWED_STATUS_FILTER_VALUES)}."
-        ),
-    )
-    compare_parser.add_argument(
-        "--status-registry-path",
-        type=Path,
-        default=DEFAULT_STRATEGY_STATUS_PATH,
-        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
-    )
-    compare_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory for saved comparison artifacts. Defaults to data/experiments.",
-    )
-    fixture_sweep_parser = subparsers.add_parser(
-        "fixture-sweep",
-        help="Run local strategy comparison across deterministic non-flat fixtures",
-    )
-    fixture_sweep_parser.add_argument(
-        "--include-hermes-fixtures",
-        action="store_true",
-        help="Include parser-only local Hermes JSON fixture strategies in the sweep.",
-    )
-    fixture_sweep_parser.add_argument(
-        "--save",
-        action="store_true",
-        help="Save JSON, CSV, and Markdown fixture sweep artifacts to the output directory.",
-    )
-    fixture_sweep_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory for saved fixture sweep artifacts. Defaults to data/experiments.",
-    )
-    fixture_sweep_parser.add_argument(
-        "--exclude-retired",
-        action="store_true",
-        help="Opt in to excluding strategies whose latest research status is retired.",
-    )
-    fixture_sweep_parser.add_argument(
-        "--status",
-        help=(
-            "Opt in to including only these comma-separated research statuses. "
-            f"Allowed: {', '.join(ALLOWED_STATUS_FILTER_VALUES)}."
-        ),
-    )
-    fixture_sweep_parser.add_argument(
-        "--status-registry-path",
-        type=Path,
-        default=DEFAULT_STRATEGY_STATUS_PATH,
-        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
-    )
-    history_parser = subparsers.add_parser(
-        "tournament-history",
-        help="Review saved local compare-strategies JSON artifacts",
-    )
-    history_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
-    )
-    champion_parser = subparsers.add_parser(
-        "tournament-champion",
-        help="Summarize the current champion strategy across saved tournaments",
-    )
-    champion_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
-    )
-    leaderboard_parser = subparsers.add_parser(
-        "export-leaderboard",
-        help="Export a Markdown strategy leaderboard from saved ranked tournaments",
-    )
-    leaderboard_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
-    )
-    leaderboard_parser.add_argument(
-        "--report-path",
-        type=Path,
-        default=Path("data/reports/strategy_leaderboard.md"),
-        help="Markdown report path. Defaults to data/reports/strategy_leaderboard.md.",
-    )
-    fixture_sweep_leaderboard_parser = subparsers.add_parser(
-        "export-fixture-sweep-leaderboard",
-        help="Export a Markdown fixture sweep robustness leaderboard",
-    )
-    fixture_sweep_leaderboard_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved fixture sweep JSON artifacts. Defaults to data/experiments.",
-    )
-    fixture_sweep_leaderboard_parser.add_argument(
-        "--report-path",
-        type=Path,
-        default=Path("data/reports/fixture_sweep_leaderboard.md"),
-        help="Markdown report path. Defaults to data/reports/fixture_sweep_leaderboard.md.",
-    )
-    short_simulation_report_parser = subparsers.add_parser(
-        "export-short-simulation-report",
-        help="Export a local-only deterministic shorting simulation report",
-    )
-    short_simulation_report_parser.add_argument(
-        "--report-path",
-        type=Path,
-        default=DEFAULT_SHORT_SIMULATION_REPORT_PATH,
-        help="Markdown report path. Defaults to data/reports/shorting_simulation_report.md.",
-    )
-    hermes_sandbox_parser = subparsers.add_parser(
-        "review-hermes-sandbox",
-        help="Review strict local Hermes strategy sandbox JSON without execution",
-    )
-    hermes_sandbox_parser.add_argument(
-        "--file",
-        type=Path,
-        required=True,
-        help="Local Hermes strategy sandbox JSON file to review.",
-    )
-    hermes_teams_parser = subparsers.add_parser(
-        "hermes-teams",
-        help="Review a strict local Hermes team registry without runtime calls",
-    )
-    hermes_teams_parser.add_argument(
-        "--file",
-        type=Path,
-        required=True,
-        help="Local Hermes team registry JSON file to review.",
-    )
-    hermes_tournament_parser = subparsers.add_parser(
-        "hermes-tournament-round",
-        help="Run a local-only Hermes team proposal routing tournament",
-    )
-    hermes_tournament_parser.add_argument(
-        "--registry",
-        type=Path,
-        required=True,
-        help="Local Hermes team registry JSON file.",
-    )
-    hermes_tournament_parser.add_argument(
-        "--proposal",
-        action="append",
-        required=True,
-        help="Local Hermes proposal JSON file. Repeat or comma-separate for multiple files.",
-    )
-    hermes_tournament_parser.add_argument(
-        "--save",
-        action="store_true",
-        help="Save local JSON and Markdown tournament artifacts.",
-    )
-    hermes_tournament_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory for saved tournament artifacts. Defaults to data/experiments.",
-    )
-    hermes_generate_parser = subparsers.add_parser(
-        "hermes-generate-proposals",
-        help="Generate strict local Hermes sandbox proposal JSON through an opt-in runtime endpoint",
-    )
-    hermes_generate_parser.add_argument("--team-id", required=True, help="Hermes team ID for the generated file.")
-    hermes_generate_parser.add_argument("--agent-id", required=True, help="Hermes agent ID for the generated file.")
-    hermes_generate_parser.add_argument("--agent-role", required=True, help="Hermes agent role for the generated file.")
-    hermes_generate_parser.add_argument("--strategy-id", required=True, help="Strategy ID for the generated file.")
-    hermes_generate_parser.add_argument(
-        "--output-file",
-        type=Path,
-        required=True,
-        help="Local file path for the raw generated Hermes JSON.",
-    )
-    hermes_generate_parser.add_argument("--learning-goal", help="Optional runtime learning goal.")
-    hermes_generate_parser.add_argument("--strategy-notes", help="Optional runtime strategy notes.")
-    analysis_note_parser = subparsers.add_parser(
-        "create-analysis-note",
-        help="Create a Markdown human review note from the latest saved ranked tournament",
-    )
-    analysis_note_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved comparison JSON artifacts. Defaults to data/experiments.",
-    )
-    analysis_note_parser.add_argument(
-        "--notes-dir",
-        type=Path,
-        default=Path("data/notes"),
-        help="Directory for analysis note Markdown files. Defaults to data/notes.",
-    )
-    analysis_note_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite the analysis note if the deterministic filename already exists.",
-    )
-    sweep_analysis_note_parser = subparsers.add_parser(
-        "create-sweep-analysis-note",
-        help="Create a Markdown human review note from the latest saved fixture sweep",
-    )
-    sweep_analysis_note_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/experiments"),
-        help="Directory containing saved fixture sweep JSON artifacts. Defaults to data/experiments.",
-    )
-    sweep_analysis_note_parser.add_argument(
-        "--notes-dir",
-        type=Path,
-        default=Path("data/notes"),
-        help="Directory for sweep analysis note Markdown files. Defaults to data/notes.",
-    )
-    sweep_analysis_note_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite the sweep analysis note if the deterministic filename already exists.",
-    )
-    decision_parser = subparsers.add_parser(
-        "record-research-decision",
-        help="Append a local strategy research decision to the Markdown ledger",
-    )
-    decision_parser.add_argument("--strategy-id", required=True, help="Strategy ID the decision applies to.")
-    decision_parser.add_argument(
-        "--decision",
-        choices=ALLOWED_RESEARCH_DECISIONS,
-        required=True,
-        help="Research decision for the strategy.",
-    )
-    decision_parser.add_argument("--reason", required=True, help="Human-readable reason for the decision.")
-    decision_parser.add_argument(
-        "--source-note",
-        type=Path,
-        help="Optional source analysis note path.",
-    )
-    decision_parser.add_argument("--next-action", help="Optional follow-up action to test next.")
-    decision_parser.add_argument(
-        "--ledger-path",
-        type=Path,
-        default=DEFAULT_DECISION_LEDGER_PATH,
-        help="Markdown decision ledger path. Defaults to data/notes/research_decisions.md.",
-    )
-    read_decisions_parser = subparsers.add_parser(
-        "research-decisions",
-        help="Print the local strategy research decision ledger",
-    )
-    read_decisions_parser.add_argument(
-        "--ledger-path",
-        type=Path,
-        default=DEFAULT_DECISION_LEDGER_PATH,
-        help="Markdown decision ledger path. Defaults to data/notes/research_decisions.md.",
-    )
-    status_parser = subparsers.add_parser(
-        "set-strategy-status",
-        help="Append a local research status for a strategy",
-    )
-    status_parser.add_argument("--strategy-id", required=True, help="Strategy ID the status applies to.")
-    status_parser.add_argument(
-        "--status",
-        choices=ALLOWED_STRATEGY_STATUSES,
-        required=True,
-        help="Research status for the strategy.",
-    )
-    status_parser.add_argument("--reason", required=True, help="Human-readable reason for the status.")
-    status_parser.add_argument(
-        "--source-note",
-        type=Path,
-        help="Optional source analysis note path.",
-    )
-    status_parser.add_argument("--next-action", help="Optional follow-up action to test next.")
-    status_parser.add_argument(
-        "--registry-path",
-        type=Path,
-        default=DEFAULT_STRATEGY_STATUS_PATH,
-        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
-    )
-    read_status_parser = subparsers.add_parser(
-        "strategy-status",
-        help="Print the local strategy status registry",
-    )
-    read_status_parser.add_argument(
-        "--registry-path",
-        type=Path,
-        default=DEFAULT_STRATEGY_STATUS_PATH,
-        help="Markdown strategy status registry path. Defaults to data/notes/strategy_status.md.",
-    )
-    subparsers.add_parser(
-        "discord-bot",
-        help="Run the safe local Discord command-center bot",
-    )
-    subparsers.add_parser(
-        "dashboard",
-        help="Launch the local-only Streamlit operator dashboard (paper-only)",
-    )
-    subparsers.add_parser(
-        "app",
-        help="Launch the optional desktop-style app window around the Streamlit dashboard",
-    )
-
-    args = parser.parse_args()
-
-    if args.command == "init-db":
-        run_init_db()
-    elif args.command == "dry-run":
-        run_dry_run(strategy_name=args.strategy)
-    elif args.command == "paper-status":
-        run_paper_status()
-    elif args.command == "report":
-        run_report(run_id=args.run_id)
-    elif args.command == "compare-strategies":
-        run_compare_strategies(
-            strategy_names=tuple(args.strategies),
-            fixture=args.fixture,
-            save=args.save,
-            output_dir=args.output_dir,
-            include_hermes_fixtures=args.include_hermes_fixtures,
-            exclude_retired=args.exclude_retired,
-            status_values=args.status,
-            status_registry_path=args.status_registry_path,
-        )
-    elif args.command == "fixture-sweep":
-        run_fixture_sweep(
-            include_hermes_fixtures=args.include_hermes_fixtures,
-            save=args.save,
-            output_dir=args.output_dir,
-            exclude_retired=args.exclude_retired,
-            status_values=args.status,
-            status_registry_path=args.status_registry_path,
-        )
-    elif args.command == "tournament-history":
-        run_tournament_history(output_dir=args.output_dir)
-    elif args.command == "tournament-champion":
-        run_tournament_champion(output_dir=args.output_dir)
-    elif args.command == "export-leaderboard":
-        run_export_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
-    elif args.command == "export-fixture-sweep-leaderboard":
-        run_export_fixture_sweep_leaderboard(output_dir=args.output_dir, report_path=args.report_path)
-    elif args.command == "export-short-simulation-report":
-        run_export_short_simulation_report(report_path=args.report_path)
-    elif args.command == "review-hermes-sandbox":
-        run_review_hermes_sandbox(file_path=args.file)
-    elif args.command == "hermes-teams":
-        run_hermes_teams(file_path=args.file)
-    elif args.command == "hermes-tournament-round":
+    clock_shown = False
+    for team_id in TEAM_IDS:
+        print(f"\n--- {TEAM_DISPLAY_NAMES[team_id]} ---")
         try:
-            proposal_paths = _proposal_paths_from_args(args.proposal)
-        except ValueError as exc:
-            print(f"Hermes tournament round unavailable: {exc}")
-            raise SystemExit(1) from exc
-        run_hermes_tournament_round_cli(
-            registry_path=args.registry,
-            proposal_paths=proposal_paths,
-            save=args.save,
-            output_dir=args.output_dir,
-        )
-    elif args.command == "hermes-generate-proposals":
-        run_hermes_generate_proposals_cli(
-            team_id=args.team_id,
-            agent_id=args.agent_id,
-            agent_role=args.agent_role,
-            strategy_id=args.strategy_id,
-            output_file=args.output_file,
-            learning_goal=args.learning_goal,
-            strategy_notes=args.strategy_notes,
-        )
-    elif args.command == "create-analysis-note":
-        run_create_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
-    elif args.command == "create-sweep-analysis-note":
-        run_create_sweep_analysis_note(output_dir=args.output_dir, notes_dir=args.notes_dir, force=args.force)
-    elif args.command == "record-research-decision":
-        run_record_research_decision(
-            strategy_id=args.strategy_id,
-            decision=args.decision,
-            reason=args.reason,
-            ledger_path=args.ledger_path,
-            source_note=args.source_note,
-            next_action=args.next_action,
-        )
-    elif args.command == "research-decisions":
-        run_research_decisions(ledger_path=args.ledger_path)
-    elif args.command == "set-strategy-status":
-        run_set_strategy_status(
-            strategy_id=args.strategy_id,
-            status=args.status,
-            reason=args.reason,
-            registry_path=args.registry_path,
-            source_note=args.source_note,
-            next_action=args.next_action,
-        )
-    elif args.command == "strategy-status":
-        run_strategy_status(registry_path=args.registry_path)
-    elif args.command == "discord-bot":
-        run_discord_bot_cli()
-    elif args.command == "dashboard":
-        run_dashboard_cli()
-    elif args.command == "app":
-        run_desktop_app_cli()
+            broker = broker_for_team(settings, team_id)
+            if not clock_shown:
+                clock = broker.clock()
+                state = "OPEN" if clock.is_open else f"closed (next open {clock.next_open})"
+                print(f"Market: {state}")
+                clock_shown = True
+            account = broker.account()
+            day = account.day_return_pct
+            day_text = f"{day * 100:+.2f}%" if day is not None else "n/a"
+            print(f"Equity: ${account.equity:,.2f} (today: {day_text}) | "
+                  f"cash ${account.cash:,.2f} | buying power ${account.buying_power:,.2f}")
+            positions = broker.positions()
+            print(f"Positions: {len(positions)}")
+            for p in positions:
+                pl = f"{p.unrealized_plpc * 100:+.1f}%" if p.unrealized_plpc is not None else "n/a"
+                print(f"  {p.side} {p.qty:g} {p.symbol} @ {p.avg_entry_price:,.2f} ({pl})")
+            print(f"Orders today: {len(broker.orders_today())}")
+        except Exception as exc:  # noqa: BLE001 - status must show the problem, not crash
+            print(f"UNAVAILABLE: {exc}")
+        for role in ROLES:
+            memory = AgentMemory.load(team_id, role, settings.data_dir)
+            print(f"  {role} memory: {len(memory.playbook)} principle(s), "
+                  f"{len(memory.lessons)} lesson(s), {memory.days_recorded} day(s) recorded")
+
+    errors = recent_errors(settings, count=5)
+    if errors:
+        print("\nRecent errors (data/runtime/errors.log):")
+        for line in errors:
+            print(f"  {line}")
     else:
-        raise ValueError(f"Unknown command: {args.command}")
+        print("\nNo errors logged.")
 
 
-def _proposal_paths_from_args(values: list[str]) -> list[Path]:
-    paths: list[Path] = []
-    for value in values:
-        paths.extend(Path(part.strip()) for part in value.split(",") if part.strip())
-    if not paths:
-        raise ValueError("At least one --proposal path is required.")
-    return paths
+def cmd_scoreboard(settings: Settings, _args) -> None:
+    from src.scoreboard import load_scoreboard, render
+
+    print(render(load_scoreboard(settings.data_dir), last_days=15))
+
+
+def cmd_kill(_settings: Settings, args) -> None:
+    if args.state == "on":
+        state = engage(args.reason or f"manual stop {ny_trading_date().isoformat()}")
+    else:
+        state = disengage()
+    print(state.describe())
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m src.main",
+        description="Two AI teams trade paper accounts daily to beat SPY and each other.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("run", help="run the forever competition loop")
+
+    cycle = sub.add_parser("cycle", help="run one trading cycle now")
+    cycle.add_argument("--team", choices=[*TEAM_IDS, "both"], default="both")
+    cycle.add_argument("--force", action="store_true", help="run even if the market is closed")
+    cycle.add_argument("--dry-run", action="store_true", help="do everything except submit orders")
+
+    sub.add_parser("eod", help="run the end-of-day scoring + learning pass now")
+    sub.add_parser("status", help="accounts, positions, market clock, agent memory")
+    sub.add_parser("scoreboard", help="competition scoreboard")
+
+    kill = sub.add_parser("kill", help="engage/disengage the kill switch")
+    kill.add_argument("state", choices=["on", "off"])
+    kill.add_argument("--reason", default=None)
+
+    return parser
+
+
+COMMANDS = {
+    "run": cmd_run,
+    "cycle": cmd_cycle,
+    "eod": cmd_eod,
+    "status": cmd_status,
+    "scoreboard": cmd_scoreboard,
+    "kill": cmd_kill,
+}
+
+
+def main(argv: list[str] | None = None) -> None:
+    # Windows consoles often default to cp1252; agent narratives are UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    args = build_parser().parse_args(argv)
+    settings = Settings.from_env()
+    COMMANDS[args.command](settings, args)
 
 
 if __name__ == "__main__":
